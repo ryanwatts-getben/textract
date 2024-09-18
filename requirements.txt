@@ -7,3 +7,6 @@ xlrd
 EbookLib
 textract==1.6.3
 PyPDF2==3.0.1
+anthropic
+python-dotenv
+aiohttp
