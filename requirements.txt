@@ -1,12 +1,5 @@
-chardet
-pdfminer.six
-docx2txt
-extract-msg==0.23.1
-SpeechRecognition
-xlrd
-EbookLib
-textract==1.6.3
 PyPDF2==3.0.1
-anthropic
 python-dotenv
-aiohttp
+boto3
+anthropic
+textract==1.6.3
