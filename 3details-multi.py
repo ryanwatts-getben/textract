@@ -4,7 +4,7 @@ import json
 from dotenv import load_dotenv
 import anthropic
 import re
-import concurrent.futures  # Add this import
+import concurrent.futures
 
 def get_unique_path(base_path):
     path = base_path
@@ -56,20 +56,8 @@ def process_with_claude(content, filename, pagenumber):
     # Replace newlines with spaces to ensure valid JSON
     cleaned_content = cleaned_content.replace('\n', ' ')
 
-    # Attempt to parse the JSON
-    try:
-        parsed_json = json.loads(cleaned_content)
-        final_content = json.dumps(parsed_json, ensure_ascii=False, separators=(',', ':'))
-        print("Parsed JSON successfully.")
-        return final_content
-    except json.JSONDecodeError as e:
-        print(f"JSON decoding failed: {e}")
-        print(f"Error at position {e.pos}: {cleaned_content[max(0, e.pos-20):e.pos+20]}")
-        
-        # If parsing fails, return the content wrapped in a JSON object
-        wrapped_content = json.dumps({"raw_content": cleaned_content})
-        print("Returning wrapped content.")
-        return wrapped_content
+    # Return the cleaned content as a string
+    return cleaned_content
 
 def process_file(file_path):
     print(f"Processing file: {file_path}")
@@ -88,7 +76,7 @@ def process_file(file_path):
 
     cleaned_content = process_with_claude(content, original_filename, pagenumber)
     print(f"Cleaned content length: {len(cleaned_content)}")
-
+    print(f"Cleaned content: {cleaned_content}")
     # The cleaned_content is already a valid JSON string, so we can write it directly
     output_filename = f"{original_filename.replace('_clean.txt', '_details.json')}"
     output_file = os.path.join(os.path.dirname(file_path), output_filename)
@@ -101,11 +89,13 @@ def process_file(file_path):
     print(f"Processed content saved to: {output_file}")
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python details.py <path_to_directory>")
+    if len(sys.argv) < 2:
+        print("Usage: python 3details-multi.py <path_to_directory>")
         return
 
-    input_directory = sys.argv[1]
+    # Join all arguments after the script name to handle paths with spaces
+    input_directory = ' '.join(sys.argv[1:])
+    
     if not os.path.isdir(input_directory):
         print(f"Directory not found: {input_directory}")
         return
@@ -127,7 +117,7 @@ def main():
     ]
 
     if not file_paths:
-        print("No files found to process.")
+        print(f"No _clean.txt files found in the directory: {input_directory}")
         return
 
     # Process files concurrently

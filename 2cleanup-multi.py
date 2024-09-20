@@ -18,7 +18,7 @@ def process_with_claude(content):
     response = client.messages.create(
         model="claude-3-haiku-20240307",
         max_tokens=4096,
-        system="Avoid acknowledging the user's request with statements like 'Here is the cleaned up text from the medical record:' or it will destroy the system we have built. Understand these are OCR'd medical records and the quality of the OCR can vary. Ensure you return the entire file content with your changes, leave nothing out.",
+        system="Do not attempt to add any text to these files. Correct obvious spelling errors only. Return only the spell checked text.",
         messages=[
             {"role": "user", "content": content},
         ]
@@ -68,11 +68,13 @@ def process_file(file_path):
         f.write(f"This is File Name: {filename}_{page_number}.pdf and Page Number: {page_number} to use when referencing this file: {cleaned_content}")
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python cleanup.py <path_to_directory>")
+    if len(sys.argv) < 2:
+        print("Usage: python 2cleanup-multi.py <path_to_directory>")
         return
 
-    input_directory = sys.argv[1]
+    # Join all arguments after the script name to handle paths with spaces
+    input_directory = ' '.join(sys.argv[1:])
+    
     if not os.path.isdir(input_directory):
         print(f"Directory not found: {input_directory}")
         return
@@ -92,6 +94,11 @@ def main():
         for filename in os.listdir(input_directory)
         if filename.endswith('.txt')
     ]
+    
+    if not file_paths:
+        print(f"No .txt files found in the directory: {input_directory}")
+        return
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_file = {
             executor.submit(process_file, file_path): file_path for file_path in file_paths

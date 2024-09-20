@@ -12,6 +12,14 @@ def standardize_date(date_str):
         return f'{month}-{day}-{year}'
     else:
         return date_str  # Return as-is if already in desired format
+def rename_files(directory):
+    for filename in os.listdir(directory):
+        if filename.endswith('VALUE_date.json'):
+            old_path = os.path.join(directory, filename)
+            new_filename = filename.replace('VALUE_date.json', 'VALUE!.json')       
+            new_path = os.path.join(directory, new_filename)
+            os.rename(old_path, new_path)
+            print(f"Renamed: {filename} -> {new_filename}")
 
 def extract_date_from_json_string(json_str):
     """Extract the value of the 'Date' key from a JSON string without parsing the entire JSON."""
@@ -87,6 +95,9 @@ def main():
     print("Output files:")
     for output_file in output_files:
         print(f"- {output_file}")
+
+    # Rename files after processing
+    rename_files(dir_path)
 
 if __name__ == "__main__":
     main()
