@@ -1,38 +1,23 @@
 import sys
 import os
 import re
+import time
+import subprocess
 
 def standardize_date(date_str):
-    """Standardize date format to MM-DD-YYYY."""
-    # Replace slashes with dashes to ensure valid filenames
-    date_str = date_str.replace('/', '-')
-    # Check if date is in MM-DD-YYYY format
-    match = re.match(r'^(\d{2})-(\d{2})-(\d{4})$', date_str)
+    """Ensure the date is in MM-DD-YYYY format."""
+    # Replace slashes with dashes for consistency
+    normalized_date = date_str.replace('/', '-')
+    # Enforce MM-DD-YYYY format and ensure it starts with '20'
+    match = re.match(r'^(\d{2})-(\d{2})-(20\d{2})$', normalized_date)
     if match:
-        return date_str
+        return normalized_date
     else:
-        return date_str  # Return as-is if already in desired format
-
-def rename_files(directory):
-    for filename in os.listdir(directory):
-        if filename.endswith('VALUE_date.json'):
-            old_path = os.path.join(directory, filename)
-            new_filename = filename.replace('VALUE_date.json', 'VALUE!.json')       
-            new_path = os.path.join(directory, new_filename)
-            os.rename(old_path, new_path)
-            print(f"Renamed: {filename} -> {new_filename}")
-
-def extract_date_from_json_string(json_str):
-    """Extract the value of the 'Date' key from a JSON string without parsing the entire JSON."""
-    match = re.search(r'"Date"\s*:\s*"([^"]+)"', json_str)
-    if match:
-        return match.group(1)
-    else:
-        raise ValueError("Missing 'Date' key in JSON string.")
+        raise ValueError(f"Date '{date_str}' is not in MM-DD-YYYY format.")
 
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python combine_1k.py <directory_path>")
+        print("Usage: python 4combine_1k.py <directory_path>")
         sys.exit(1)
 
     dir_path = sys.argv[1]
@@ -42,10 +27,10 @@ def main():
         sys.exit(1)
 
     files_processed = 0
-    output_files = set()
+    output_files = {}  # Tracks which output files have been initiated
 
     try:
-        # List all files in the top level of the directory
+        # Iterate over all JSON files with "_details" in their name
         for filename in os.listdir(dir_path):
             if (
                 "_details" in filename and
@@ -55,50 +40,64 @@ def main():
                 file_path = os.path.join(dir_path, filename)
                 files_processed += 1
 
-                # Read file contents as a string
-                with open(file_path, 'r') as file:
-                    json_str = file.read()
+                # Read the entire content of the JSON file as a string
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    content = file.read()
 
-                try:
-                    # Extract and standardize the Date
-                    date_str = extract_date_from_json_string(json_str)
-                    standardized_date = standardize_date(date_str)
-                except ValueError as e:
-                    print(f"Error in file '{filename}': {e}")
-                    continue
+                # Use regex to extract all JSON objects within the string
+                # This pattern assumes that JSON objects do not contain nested braces
+                json_objects = re.findall(r'\{[^{}]*\}', content, re.DOTALL)
 
-                # Prepare the output file path without appending '_date'
-                output_filename = f"{standardized_date}" + "_date.json"
-                output_file_path = os.path.join(dir_path, output_filename)
+                for json_obj in json_objects:
+                    # Extract the 'Date' value using regex without parsing entire JSON
+                    date_match = re.search(r'"Date"\s*:\s*"([^"]+)"', json_obj)
+                    if date_match:
+                        date_str = date_match.group(1).strip()
+                        try:
+                            standardized_date = standardize_date(date_str)
+                        except ValueError as ve:
+                            print(f"Skipping JSON object in file '{filename}': {ve}")
+                            continue
 
-                # Check for existing files
-                if os.path.exists(output_file_path):
-                    # Append to existing file
-                    with open(output_file_path, 'a') as outfile:
-                        if os.path.getsize(output_file_path) > 0:
-                            outfile.write(',')
-                        outfile.write(json_str)
-                    action = "Appended to"
-                else:
-                    # Create a new file
-                    with open(output_file_path, 'w') as outfile:
-                        outfile.write(json_str)
-                    action = "Created"
+                        # Define the output filename
+                        output_filename = f"{standardized_date}_final.json"
+                        output_file_path = os.path.join(dir_path, output_filename)
 
-                output_files.add(output_filename)
-                print(f"{action} file '{output_filename}'")
+                        # Initialize the file with '[' if not already done
+                        if output_filename not in output_files:
+                            with open(output_file_path, 'w', encoding='utf-8') as outfile:
+                                outfile.write('[' + json_obj)
+                            output_files[output_filename] = True
+                        else:
+                            # Append a comma and the JSON object
+                            with open(output_file_path, 'a', encoding='utf-8') as outfile:
+                                outfile.write(',' + json_obj)
+                    else:
+                        print(f"No 'Date' key found in JSON object in file '{filename}'. Skipping this object.")
+        
+        # After processing all files, close the JSON arrays by adding ']'
+        for output_filename in output_files:
+            output_file_path = os.path.join(dir_path, output_filename)
+            with open(output_file_path, 'a', encoding='utf-8') as outfile:
+                outfile.write(']')
+    
     except Exception as e:
         print(f"An error occurred: {e}")
         sys.exit(1)
 
-    # Basic output
+    # Print summary
     print(f"\nTotal files processed: {files_processed}")
     print("Output files:")
-    for output_file in output_files:
-        print(f"- {output_file}")
+    for output_filename in output_files:
+        print(f"- {output_filename}")
 
-    # Remove or comment out the renaming section as it's no longer needed
-    # rename_files(dir_path)
+    # After processing all files, wait 1 second and start 5present-multi.py
+    time.sleep(1)
+    try:
+        subprocess.run(['python', 'bills/5present-multi.py', dir_path], check=True)
+        print(f"Started processing with 5present-multi.py for directory: {dir_path}")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to start 5present-multi.py for directory {dir_path}: {e}")
 
 if __name__ == "__main__":
     main()

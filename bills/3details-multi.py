@@ -5,8 +5,11 @@ from dotenv import load_dotenv
 import anthropic
 import re
 import concurrent.futures
+from concurrent.futures import as_completed  # Add this import
 import base64
 import httpx
+import time
+import subprocess
 
 def get_unique_path(base_path):
     path = base_path
@@ -39,7 +42,7 @@ def process_with_claude(content, filename, pagenumber, image_media_type, image_d
         return ""
     
     client = anthropic.Anthropic()
-    system_message = f'''You are a medical billing and records assistant. Understand that multiple dates can be represented on 1 page. Your job is to list the different procedure dates, not payment dates. You will be given a page of a medical bill and you will extract the relevant data using MM-DD-YYYY format for Date into this JSON format: 
+    system_message = f'''You are a medical billing and records assistant. Understand that multiple dates can be represented on 1 page. Your job is to list the different procedure dates, not payment dates. You will be given a page of a medical bill and you will extract the relevant data and use MM-DD-YYYY format for Date into this JSON format: 
     {{ 
         "Page Number":"{pagenumber}",
         "{filename}", [
@@ -85,7 +88,7 @@ def process_with_claude(content, filename, pagenumber, image_media_type, image_d
         }},
         ...
     ]
-    }}'''
+    }} It is imperative that you use the MM-DD-YYYY format for Date.'''
     
     response = client.messages.create(
         model="claude-3-5-sonnet-20240620",
@@ -111,7 +114,7 @@ def process_with_claude(content, filename, pagenumber, image_media_type, image_d
             },
                 {
                     "role": "assistant",
-                    "content": '{'
+                    "content": '[{'
                 },
             ],
         )  
@@ -220,6 +223,12 @@ def main():
                 print(f"Finished processing {file_path}")
             except Exception as exc:
                 print(f"{file_path} generated an exception: {exc}")
+    
+        # After processing all files, wait 1 second and start 4combine_1k.py
+        time.sleep(1)
+        subprocess.run(['python', 'bills/4combine_1k.py', input_directory])
+
+    print("All files have been processed.")
 
 if __name__ == "__main__":
     main()

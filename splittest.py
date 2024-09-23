@@ -4,6 +4,10 @@ import os
 import boto3
 import time
 from dotenv import load_dotenv
+from PIL import Image
+import pytesseract
+import fitz  # PyMuPDF
+import concurrent.futures
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -19,7 +23,7 @@ def extract_text_from_pdf_page(pdf_reader, page_num):
         print(f"PyPDF2 extraction failed: {str(e)}")
         return None
 
-def extract_text_using_aws_textract(pdf_path, page_num):
+def extract_text_using_aws_textract(file_path, page_num):
     try:
         s3 = boto3.client('s3',
                           aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
@@ -32,11 +36,11 @@ def extract_text_using_aws_textract(pdf_path, page_num):
 
         textract_bucket = os.environ.get('AWS_TEXTRACT_BUCKET_NAME')
         folder_name = '019207c4-e513-7d59-8697-6411084a2633'
-        filename = os.path.basename(pdf_path)
+        filename = os.path.basename(file_path)
         s3_key = f'{folder_name}/{filename}'
 
         # Upload PDF to S3
-        s3.upload_file(pdf_path, textract_bucket, s3_key)
+        s3.upload_file(file_path, textract_bucket, s3_key)
 
         # Start Textract job
         response = textract_client.start_document_text_detection(
@@ -77,6 +81,15 @@ def extract_text_using_aws_textract(pdf_path, page_num):
         print(f"AWS Textract extraction failed: {str(e)}")
         return None
 
+def extract_text_from_image(image_path):
+    try:
+        image = Image.open(image_path)
+        text = pytesseract.image_to_string(image)
+        return text.strip() if text.strip() else None
+    except Exception as e:
+        print(f"Image text extraction failed: {str(e)}")
+        return None
+
 def get_unique_path(base_path):
     path = base_path
     counter = 1
@@ -86,46 +99,42 @@ def get_unique_path(base_path):
         counter += 1
     return path
 
-def process_pdf(pdf_path, input_directory):
-    pdf_filename = os.path.basename(pdf_path)
-    folder_name = os.path.splitext(pdf_filename)[0]
-
-    # Create the output folder
-    output_folder = os.path.join(input_directory, folder_name, 'split')
-    output_folder = get_unique_path(output_folder)
-    os.makedirs(output_folder)
+def process_file(file_path):
+    file_filename = os.path.basename(file_path)
 
     try:
-        with open(pdf_path, 'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            total_pages = len(reader.pages)
+        if file_path.lower().endswith('.pdf'):
+            process_pdf(file_path)
+        else:
+            print(f"Unsupported file type: {file_filename}")
+            return
 
-            for page_num in range(total_pages):
-                # Extract text from the current page
-                extracted_text = extract_text_from_pdf_page(reader, page_num)
-                
-                # If PyPDF2 fails, use AWS Textract
-                if extracted_text is None:
-                    extracted_text = extract_text_using_aws_textract(pdf_path, page_num)
-                
-                if extracted_text is None:
-                    extracted_text = f"Unable to extract text from page {page_num + 1}"
-
-                # Create the output file path for this page
-                output_file = os.path.join(output_folder, f"Page_{page_num + 1}.txt")
-                output_file = get_unique_path(output_file)
-
-                # Write the extracted text to the output file
-                with open(output_file, 'w', encoding='utf-8') as f:
-                    f.write(extracted_text)
-
-                print(f"Page {page_num + 1} extracted and saved to: {output_file}")
-
-        print(f"All pages from '{pdf_filename}' extracted and saved in folder: {output_folder}")
+        print(f"File '{file_filename}' processed.")
 
     except Exception as e:
-        print(f"An error occurred while processing '{pdf_filename}': {str(e)}")
+        print(f"An error occurred while processing '{file_filename}': {str(e)}")
 
+def process_pdf(pdf_path):
+    import os
+
+    pdf_document = fitz.open(pdf_path)
+    total_pages = len(pdf_document)
+    directory = os.path.dirname(pdf_path)
+    base_filename = os.path.splitext(os.path.basename(pdf_path))[0]
+
+    # Create a subdirectory named after the PDF file
+    output_dir = os.path.join(directory, base_filename)
+    os.makedirs(output_dir, exist_ok=True)
+
+    for page_num in range(total_pages):
+        page = pdf_document[page_num]
+        pix = page.get_pixmap()
+        # Save images inside the subdirectory with names like page_1.png
+        output_file = os.path.join(output_dir, f"page_{page_num + 1}.png")
+        pix.save(output_file)
+        print(f"Page {page_num + 1} converted and saved to: {output_file}")
+
+    pdf_document.close()
 def main():
     if len(sys.argv) == 2:
         input_directory = sys.argv[1]
@@ -137,19 +146,33 @@ def main():
         print(f"Directory not found: {input_directory}")
         return
 
-    # Find all PDF files in the input directory
-    pdf_files = [
+    # Load environment variables
+    load_dotenv()
+    max_workers = int(os.environ.get("MAX_WORKERS", 10))
+
+    # Find all .pdf files in the input directory
+    files = [
         os.path.join(input_directory, filename)
         for filename in os.listdir(input_directory)
         if filename.lower().endswith('.pdf') and os.path.isfile(os.path.join(input_directory, filename))
     ]
 
-    if not pdf_files:
-        print("No PDF files found in the directory.")
+    if not files:
+        print("No .pdf files found in the directory.")
         return
 
-    for pdf_path in pdf_files:
-        process_pdf(pdf_path, input_directory)
+    # Process files concurrently
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_file = {
+            executor.submit(process_file, file_path): file_path for file_path in files
+        }
+        for future in concurrent.futures.as_completed(future_to_file):
+            file_path = future_to_file[future]
+            try:
+                future.result()
+                print(f"Finished processing {file_path}")
+            except Exception as exc:
+                print(f"{file_path} generated an exception: {exc}")
 
 if __name__ == "__main__":
     main()
