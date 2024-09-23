@@ -1,0 +1,15 @@
+{
+    "Date": "VALUE",
+    "File Name": "{filename}",
+    "Page Number": "{pagenumber}",
+    "Patient": "",
+    "Medical Facility": "",
+    "Name of Doctor": "",
+    "ICD10CM": [],
+    "CPT Codes": [],
+    "Billing Line Items From Today Only": [],
+    "Amount Paid Already": [],
+    "Amount Still Owed": [],
+    "Rx": [],
+    "Other Medically Relevant Information": []
+  }
