@@ -78,48 +78,90 @@ Claude, please combine the medical records from the provided JSON files using th
 Here is the golden output that will thrill my heart if you can produce it:
 
 ```json
-{
+  {
     "Date": "08-25-2023",
     "General": [
-        {
-            "Medically Relevant Information That Is Present On All Pages": [
-                {
-                    "Patient": "BECK, ALYSSA S",
-                    "Medical Facility": "Tideland's Rehab/PT",
-                    "Referred By": null,
-                    "Referred To": null,
-                    "Name of Doctor": "Spivey, NP, Kimberly N",
-                    "ICD10CM": ["V65.01", "V65.02", "R51.89"],
-                    "CPT Codes": ["97802"],
-                    "Rx": ["Naproxen, Floricet"],
-                    "Other Medically Relevant Information": [{"Brief Summary": "Physical Therapy, occipital HA, neck pain f/u MVA, possible whiplash"}],
-                    "Daily Summary": "On August 25, 2023, patient BECK, ALYSSA S visited Tideland's Rehab/PT for a follow-up appointment related to a motor vehicle accident (MVA). The patient was seen by Spivey, NP, Kimberly N for complaints of occipital headache and neck pain, with possible whiplash. The visit focused on physical therapy assessment and treatment. The provider documented the encounter using ICD-10-CM codes V65.01 (Pediatric head injury counseling), V65.02 (Injury prevention counseling), and R51.89 (Other headache), along with CPT code 97802 (Medical nutrition therapy; initial assessment and intervention, individual, face-to-face with the patient, each 15 minutes). Medications prescribed or reviewed during the visit included Naproxen and Floricet. The overall treatment plan appeared to be centered on addressing the patient's post-MVA symptoms through physical therapy and pain management."
-                }
-            ]
-        }
+      {
+        "Medically Relevant Information That Is Present On All Pages": [
+          {
+            "Patient": "Jim Stephenson",
+            "Medical Facility": "America's PT Palace",
+            "Referred By": null,
+            "Referred To": null,
+            "Name of Doctor": ["Tbone Placeholder, PT"],
+            "ICD10CM": [
+              {
+                "V65.01": "1",
+                "V65.02": "2",
+                "R51.89": "3"
+              }
+            ],
+            "CPT Codes": [
+              {
+                "97802": "4"
+              }
+            ],
+            "Rx": [
+              {
+                "Naproxen": "5",
+                "Floricet": "6"
+              }
+            ],
+            "Procedures Performed or Findings Made": [
+              {
+                "Brief Summary": "Physical Therapy, occipital HA, neck pain f/u MVA, possible whiplash"
+              }
+            ],
+            "Daily Summary": ""
+          }
+        ]
+      }
     ],
     "Page Numbers That Contain The Following Information": [
-        {"Referred By": []},
-        {"Referred To": []},
-        {"Name of Doctor": [
-            {"Spivey, NP, Kimberly N": "4"}
-        ]},
-        {"ICD10CM": [
-            {"Floricet": "4"},
-            {"Naproxen": "5"}
-        ]},
-        {"CPT Codes": [
-            {"97802": "4"}
-        ]},
-        {"Rx": [
-            {"Floricet": "4"},
-            {"Naproxen": "5"}
-        ]},
-        {"Other Medically Relevant Information": [
-            {"Physical Therapy, occipital HA, neck pain f/u MVA, possible whiplash": "4"}
-            ]}
-    ]
-}
+      {
+        "Name of Doctor": [
+          {
+            "Tbone Placeholder, PT": "1"
+          }
+        ]
+      },
+      {
+        "ICD10CM": [
+          {
+            "V65.01": "2"
+          },
+          {
+            "V65.02": "3"
+          }
+        ]
+      },
+      {
+        "CPT Codes": [
+          {
+            "97802": "4"
+          }
+        ]
+      },
+      {
+        "Rx": [
+          {
+            "Floricet": "6"
+          },
+          {
+            "Naproxen": "5"
+          }
+        ]
+      },
+      {
+        "Procedures Performed or Findings Made": [
+          {
+            "Physical Therapy, occipital HA, neck pain f/u MVA, possible whiplash": "2"
+          }
+        ]
+      }
+    ],
+    "PDF": "/pdf/385-390cmc.pdf"
+  }
 ```
 
 Please process the provided JSON input files and generate a combined output following these instructions and the structure of the example output provided.

@@ -4,9 +4,10 @@ import sys
 from dotenv import load_dotenv
 import anthropic
 import concurrent.futures
+from concurrent.futures import as_completed  # Ensure this import is present
 import subprocess
 import base64
-import re  # Ensure regex is imported
+import re
 
 def get_unique_path(base_path):
     path = base_path
@@ -76,7 +77,7 @@ def process_with_claude(content, client_instance, image_media_type, image_data):
             },
             {
                 "role": "assistant",
-                "content": '[{'
+                "content": '['
             },
         ],
     )  
@@ -111,27 +112,21 @@ def process_file(file_path, client):
     input_filename = os.path.basename(file_path)
     filename, _ = os.path.splitext(input_filename)
 
-    # Extract page number and base filename by removing '_clean' suffix
-    if filename.endswith('_clean'):
-        base_filename = filename[:-6]  # Remove '_clean'
-        parts = base_filename.split('_')
-        if len(parts) > 1 and parts[-1].isdigit():
-            page_number = parts[-1]
-            filename_without_page = '_'.join(parts[:-1])
-        else:
-            page_number = "Unknown"
-            filename_without_page = base_filename
+    # Extract page number and base filename
+    parts = filename.split('_')
+    if len(parts) > 1 and parts[-1].isdigit():
+        page_number = parts[-1]
+        filename_without_page = '_'.join(parts[:-1])
     else:
-        base_filename = filename
         page_number = "Unknown"
-        filename_without_page = base_filename
+        filename_without_page = filename
 
     # Get image data
     image_media_type, image_data = get_image_data(file_path)
 
     # Check if image data is available
     if image_media_type is None or image_data is None:
-        print(f"No image found for {base_filename}, skipping.")
+        print(f"No image found for {filename}, skipping.")
         return
 
     # Create the output file path
@@ -158,7 +153,7 @@ def process_file(file_path, client):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python bill-multi.py <path_to_directory>")
+        print("Usage: python 2bill-multi.py <path_to_directory>")
         return
 
     # Join all arguments after the script name to handle paths with spaces
@@ -183,7 +178,7 @@ def main():
         max_workers = 250
     print(f"MAX_WORKERS set to: {max_workers}")  # Debug statement
 
-    # Process all _clean.txt files in the directory and subdirectories concurrently
+    # Process all .txt files in the directory and subdirectories concurrently
     file_paths = []
     for root, dirs, files in os.walk(input_directory):
         for filename in files:
@@ -191,10 +186,10 @@ def main():
                 full_path = os.path.join(root, filename)
                 file_paths.append(full_path)
 
-    print(f"Found {len(file_paths)} _clean.txt files to process.")  # Debug statement
+    print(f"Found {len(file_paths)} .txt files to process.")  # Debug statement
 
     if not file_paths:
-        print(f"No _clean.txt files found in the directory: {input_directory}")
+        print(f"No .txt files found in the directory: {input_directory}")
         return
 
     # Initialize the Anthropic client once
@@ -209,23 +204,15 @@ def main():
                 except Exception as exc:
                     print(f"Generated an exception: {exc}")
 
-        print("All pages from all PDFs have been processed.")
+        print("All files have been processed.")
 
-        # Start 2bill-multi.py for each unique PDF output folder
-        # Collect unique split folders based on the directory structure
-        unique_pdf_folders = set()
-        for file_path in file_paths:
-            # Assuming output folders are structured as .../split/
-            split_folder = os.path.dirname(file_path)
-            unique_pdf_folders.add(split_folder)
-        
-        for folder in unique_pdf_folders:
-            time.sleep(1)  # Wait 1 second before starting the next script
-            try:
-                subprocess.run(['python', 'bills/2bill-multi.py', folder], check=True)
-                print(f"Started processing with 2bill-multi.py for folder: {folder}")
-            except subprocess.CalledProcessError as e:
-                print(f"Failed to start 2bill-multi.py for folder {folder}: {e}")
+        # After processing, wait 1 second and start 3details-multi.py
+        time.sleep(1)
+        try:
+            subprocess.run(['python', 'bills/3details-multi.py', input_directory], check=True)
+            print(f"Started processing with 3details-multi.py for directory: {input_directory}")
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to start 3details-multi.py for directory {input_directory}: {e}")
     
     except Exception as e:
         print(f"An error occurred in main execution: {e}")

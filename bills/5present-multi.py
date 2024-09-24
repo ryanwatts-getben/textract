@@ -66,32 +66,6 @@ please combine the medical bills from the provided JSON files using the followin
        ...
      ]}
    - Where $key is the category (e.g., "ICD10CM"), $value is the specific item (e.g., "G43.309"), and $page_numbers is a comma-separated list of page numbers where that item appears (e.g., "5, 9, 13, 27").
-   
-     "Billing Line Items From Today Only": [],
-  "Amount Paid Already": [],
-  "Amount Still Owed": [],
-  
-  Billing Line Items From Today Only, Amount Paid Already, Amount Still Owed
-  
-  
-  {
-    "Date": "The Date in the File you read",
-	"General": 
-    "File Name": "{filename}",
-    "Page Number": "{pagenumber}",
-    "Patient": "",
-    "Total Charges For Today": "",
-    "Medical Facility": "",
-    "Name of Doctor": "",
-    "ICD10CM": [],
-    "CPT Codes": [],
-    "Billing Line Items From Today Only": [],
-    "Amount Paid Already": [],
-    "Amount Still Owed": [],
-    "Rx": [],
-    "Other Medically Relevant Information": []
-  }
-  
   {
     "Date": "08-25-2023",
     "General": [
@@ -165,7 +139,8 @@ please combine the medical bills from the provided JSON files using the followin
         }
         {"Other Medically Relevant Information": [
             {"Physical Therapy, occipital HA, neck pain f/u MVA, possible whiplash": "4"}
-            ]}
+            ]
+        }
     ]
 }
 ```

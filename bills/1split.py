@@ -124,10 +124,13 @@ def main():
 
         print("All pages from all PDFs have been processed.")  # {{ edit_3 }}
 
+        # Wait for 1 second before starting 2bill-multi.py
+        time.sleep(1)
+
         # Start 2bill-multi.py for each unique PDF output folder  # {{ edit_4 }}
         for folder in unique_pdf_folders:  # {{ edit_5 }}
-            time.sleep(1)  # Wait 1 second before starting the next script
-            subprocess.run(['python', 'bills/2bill-multi.py', folder])  # {{ edit_6 }}
+            subprocess.run(['python', 'bills/2bill-multi.py', folder], check=True)  # {{ edit_6 }}
+            print(f"Started processing with 2bill-multi.py for folder: {folder}")
 
     except Exception as e:
         print(f"An error occurred while processing the PDFs: {str(e)}")

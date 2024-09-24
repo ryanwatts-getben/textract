@@ -17,7 +17,7 @@ def delete_files_with_strings(directory, strings_to_check):
         print(f"An error occurred: {e}")
 
 # Define the directory and strings to search for
-directory = 'C:/Users/custo/OneDrive/Desktop/medscan/textract/textract/medchrondebug/OrthoSC Records 02.10.24-04.08.24/split_aws/proof'  # Replace with your folder path
+directory = 'C:/Users/custo/OneDrive/Desktop/medscan/textract/textract/!bill/Carolina Radiology Bills DOS 11_20_23-08_27_24/Carolina Radiology Bills DOS 11_20_23-08_27_24/split_1'  # Replace with your folder path
 strings_to_check = ['clean', 'final', 'details']
 
 # Call the function to delete matching files

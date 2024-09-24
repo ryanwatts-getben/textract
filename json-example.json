@@ -1,0 +1,143 @@
+{
+    "Date": "",
+    "General": [
+        {
+            "Medically Relevant Information That Is Present On All Pages": [
+                {
+                    "Patient": "",
+                    "Medical Facility": "",
+                    "Referred By": null,
+                    "Referred To": "",
+                    "Name of Doctor": [],
+                    "ICD10CM": [],
+                    "CPT Codes": [],
+                    "Rx": [],
+                    "Other Medically Relevant Information": [],
+                    "Daily Summary": ""
+                }
+            ]
+        }
+    ],
+    "Page Numbers That Contain The Following Information": [
+        {"Referred By": []},
+        {"Referred To": [
+            {"[referred_to]": "$page_ref"}
+        ]},
+        {"Name of Doctor": [
+            {"[name]": "$page_ref"},
+            {"[name]": "$page_ref"},
+            {"[name]": "$page_ref"}
+        ]},
+        {"ICD10CM": []},
+        {"CPT Codes": [
+            {"[cpt]": "$page_ref"},
+            {"[cpt]": "$page_ref"},
+            {"[cpt]": "$page_ref"}
+        ]},
+        {"Rx": []},
+        {"Other Medically Relevant Information": [
+            {"[rx]": "$page_ref"},
+            {"[rx]": "$page_ref"},
+            {"[rx]": "$page_ref"}
+        ]}
+    ]
+}
+
+```json
+{
+    "Date": "",
+    "General": [
+      {
+        "Medically Relevant Information That Is Present On All Pages": [
+          {
+            "Patient": "",
+            "Medical Facility": "",
+            "Referred By": null,
+            "Referred To": null,
+            "Name of Doctor": [""],
+            "ICD10CM": [
+              {
+                "$icd": "$page_ref",
+                "$icd": "$page_ref",
+                "$icd": "$page_ref"
+              }
+            ],
+            "CPT Codes": [
+              {
+                "$cpt": "$page_ref",
+                "$cpt": "$page_ref",
+                "$cpt": "$page_ref",
+                "$cpt": "$page_ref",
+                "$cpt": "$page_ref",
+
+              }
+            ],
+            "Rx": [
+              {
+                "$rx": "$page_ref",
+                "$rx": "$page_ref",
+                "$rx": "$page_ref",
+                "$rx": "$page_ref",
+                "$rx": "$page_ref",
+                "$rx": "$page_ref",
+                "$rx": "$page_ref",
+                "$rx": "$page_ref",
+                "$rx": "$page_ref",
+                "$rx": "$page_ref"
+              }
+            ],
+            "Procedures Performed or Findings Made": [
+              {
+                "Brief Summary": ""
+              }
+            ],
+            "Daily Summary": ""
+          }
+        ]
+      }
+    ],
+    "Page Numbers That Contain The Following Information": [
+      {
+        "Name of Doctor": [
+          {
+            "": "$page_ref"
+          }
+        ]
+      },
+      {
+        "ICD10CM": [
+          {
+            "": "$page_ref"
+          },
+          {
+            "": "$page_ref"
+          }
+        ]
+      },
+      {
+        "CPT Codes": [
+          {
+            "": "$page_ref"
+          }
+        ]
+      },
+      {
+        "Rx": [
+          {
+            "": "$page_ref"
+          },
+          {
+            "": "$page_ref"
+          }
+        ]
+      },
+      {
+        "Procedures Performed or Findings Made": [
+          {
+            "": "$page_ref"
+          }
+        ]
+      }
+    ],
+    "PDF": "/path/to/pdf/file.pdf"
+  },```
