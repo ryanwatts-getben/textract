@@ -5,43 +5,62 @@ from dotenv import load_dotenv
 import anthropic
 import re
 import concurrent.futures
-from concurrent.futures import as_completed  # Add this import
+from concurrent.futures import as_completed
 import base64
-import httpx
 import time
 import subprocess
+import logging  # {{ edit_1 }}
 
 def get_unique_path(base_path):
+    """
+    Generate a unique file path by appending an incrementing counter
+    if the specified path already exists.
+    """
     path = base_path
     counter = 1
     while os.path.exists(path):
         name, ext = os.path.splitext(base_path)
         path = f"{name}_{counter}{ext}"
         counter += 1
+        if counter > 1000:  # Prevent infinite loop  # {{ edit_2 }}
+            logging.error("Unable to create a unique path after 1000 attempts.")
+            raise Exception("Exceeded maximum number of attempts to create a unique path.")
     return path
 
 def extract_page_number(filename):
-    match = re.search(r'_(\d+)_', filename)
+    """
+    Extract the page number from the filename.
+    """
+    match = re.search(r'Page_(\d+)', filename)
     return match.group(1) if match else "Unknown"
 
 def get_image_data(filename):
+    """
+    Retrieve the base64-encoded image data corresponding to the given filename.
+    """
     image_path = f"{filename}.png"
     image_media_type = "image/png"
     if os.path.exists(image_path):
-        with open(image_path, 'rb') as f:
-            image_content = f.read()
-        image_data = base64.b64encode(image_content).decode('utf-8')
-        return image_media_type, image_data
+        try:
+            with open(image_path, 'rb') as f:
+                image_content = f.read()
+            image_data = base64.b64encode(image_content).decode('utf-8')
+            return image_media_type, image_data
+        except Exception as e:
+            logging.error(f"Failed to read image file {image_path}: {e}")
+            return None, None
     else:
-        print(f"Image not found: {image_path}")
+        logging.warning(f"Image not found: {image_path}")
         return None, None
 
-def process_with_claude(content, filename, pagenumber, image_media_type, image_data):
+def process_with_claude(content, filename, pagenumber, image_media_type, image_data, client):
+    """
+    Send content and image data to the AI assistant and return the response.
+    """
     if not content.strip():
-        print("Content is empty, skipping API call.")
+        logging.warning("Content is empty, skipping API call.")
         return ""
     
-    client = anthropic.Anthropic()
     system_message = f'''You are a medical billing and records assistant. Understand that multiple dates can be represented on 1 page. Your job is to list the different procedure dates, not payment dates. You will be given a page of a medical bill and you will extract the relevant data and use MM-DD-YYYY format for Date into this JSON format: 
     {{ 
         "Page Number":"{pagenumber}",
@@ -60,66 +79,44 @@ def process_with_claude(content, filename, pagenumber, image_media_type, image_d
                 "Rx":[],
                 "Other Medically Relevant Information":[]
             }}
-        }},
-        {{
-            "List All Payments":[{{
-                "Date":"",
-                "Patient":"",
-                "Medical Facility":"",
-                "Name of Doctor":"",
-                "ICD10CM":[],
-                "CPT Codes":[],
-                "Billing Line Items From Today Only":[],
-                "Amount Paid Already":[],
-                "Amount Still Owed":[],
-                "Rx":[],
-                "Other Medically Relevant Information":[]
-            }},
-            "List All Adjustments":[{{
-                "Date":"",
-                "Patient":"",
-                "Medical Facility":"",
-                "Name of Doctor":"",
-                "ICD10CM":[],
-                "CPT Codes":[],
-                "Billing Line Items From Today Only":[],
-                "Amount Paid Already":[],
-            }}
-        }},
-        ...
-    ]
+        }}
+        ]
     }} It is imperative that you use the MM-DD-YYYY format for Date.'''
     
-    response = client.messages.create(
-        model="claude-3-5-sonnet-20240620",
-        temperature=0.0,
-        max_tokens=4096,
-        system=system_message,
-        messages=[
-            {"role": "user", 
-             "content": [
-                 {
-                     "type": "image",
-                     "source": {
-                         "type": "base64",
-                         "media_type": image_media_type,
-                         "data": image_data,
+    try:
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20240620",
+            temperature=0.0,
+            max_tokens=4096,
+            system=system_message,
+            messages=[
+                {"role": "user", 
+                 "content": [
+                     {
+                         "type": "image",
+                         "source": {
+                             "type": "base64",
+                             "media_type": image_media_type,
+                             "data": image_data,
+                         },
                      },
-                 },
-                 {
-                    "type" : "text",
-                    "text" : content
+                     {
+                        "type" : "text",
+                        "text" : content
+                    },
+                 ]
                 },
-             ]
-            },
                 {
                     "role": "assistant",
                     "content": '[{'
                 },
             ],
         )  
-    
-    # Handle response.content being a list
+    except Exception as e:
+        logging.error(f"Error communicating with Claude API: {e}")
+        return ""
+
+    # Extract the text content from the response
     if isinstance(response.content, list):
         cleaned_content = ''.join(
             item.text if hasattr(item, 'text') else item.get('text', '')
@@ -138,23 +135,31 @@ def process_with_claude(content, filename, pagenumber, image_media_type, image_d
     # Replace newlines with spaces to ensure valid JSON
     cleaned_content = cleaned_content.replace('\n', ' ')
 
-    # Return the cleaned content as a string
     return cleaned_content
 
-def process_file(file_path):
-    print(f"Processing file: {file_path}")
+def process_file(file_path, client):
+    """
+    Process a single cleaned text file:
+    - Extract relevant data using the AI assistant.
+    - Save the output as a JSON file.
+    """
+    logging.info(f"Processing file: {file_path}")
 
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        logging.error(f"Failed to read file {file_path}: {e}")
+        return
 
     if not content:
-        print(f"File {file_path} is empty.")
+        logging.warning(f"File {file_path} is empty.")
         return
 
     original_filename = os.path.basename(file_path)
     pagenumber = extract_page_number(original_filename)
-    print(f"Original filename: {original_filename}")
-    print(f"Page number: {pagenumber}")
+    logging.debug(f"Original filename: {original_filename}")
+    logging.debug(f"Page number: {pagenumber}")
 
     # Get image data
     image_base_name = file_path.replace('_clean.txt', '')
@@ -162,43 +167,62 @@ def process_file(file_path):
 
     # Check if image data is available
     if image_media_type is None or image_data is None:
-        print(f"No image found for {original_filename}, skipping.")
+        logging.warning(f"No image found for {original_filename}, skipping.")
         return
 
-    cleaned_content = process_with_claude(content, original_filename, pagenumber, image_media_type, image_data)
-    print(f"Cleaned content length: {len(cleaned_content)}")
-    print(f"Cleaned content: {cleaned_content}")
-    # The cleaned_content is already a valid JSON string, so we can write it directly
+    cleaned_content = process_with_claude(content, original_filename, pagenumber, image_media_type, image_data, client)
+    
+    if not cleaned_content:
+        logging.warning(f"No content received from Claude for file {file_path}.")
+        return
+
+    logging.debug(f"Cleaned content length: {len(cleaned_content)}")
+    # Save the processed content
     output_filename = f"{original_filename.replace('_clean.txt', '_details.json')}"
     output_file = os.path.join(os.path.dirname(file_path), output_filename)
     output_file = get_unique_path(output_file)
-    print(f"Saving processed content to: {output_file}")
+    logging.info(f"Saving processed content to: {output_file}")
 
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(cleaned_content)
-
-    print(f"Processed content saved to: {output_file}")
+    try:
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(cleaned_content)
+        logging.info(f"Processed content saved to: {output_file}")
+    except Exception as e:
+        logging.error(f"Failed to write to file {output_file}: {e}")
 
 def main():
+    """
+    Main function to process all cleaned text files in a directory:
+    - Sends them to the AI assistant for detailed extraction.
+    - Saves the extracted details as JSON files.
+    """
+    # Configure logging  # {{ edit_3 }}
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
     if len(sys.argv) < 2:
-        print("Usage: python 3details-multi.py <path_to_directory>")
+        logging.error("Usage: python 3details-multi.py <path_to_directory>")
         return
 
-    # Join all arguments after the script name to handle paths with spaces
+    # Handle paths with spaces
     input_directory = ' '.join(sys.argv[1:])
     
     if not os.path.isdir(input_directory):
-        print(f"Directory not found: {input_directory}")
+        logging.error(f"Directory not found: {input_directory}")
         return
 
     # Load environment variables
     load_dotenv()
-    if "ANTHROPIC_API_KEY" not in os.environ:
-        print("ANTHROPIC_API_KEY not found in .env file")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        logging.error("ANTHROPIC_API_KEY not found in .env file")
         return
 
     # Get MAX_WORKERS from .env, default to 10 if not set
-    max_workers = int(os.environ.get("MAX_WORKERS", 10))
+    try:
+        max_workers = int(os.environ.get("MAX_WORKERS", 10))
+    except ValueError:
+        logging.warning("Invalid MAX_WORKERS value in .env. Using default value of 10.")
+        max_workers = 10
 
     # Collect all files to process
     file_paths = [
@@ -208,27 +232,34 @@ def main():
     ]
 
     if not file_paths:
-        print(f"No _clean.txt files found in the directory: {input_directory}")
+        logging.warning(f"No _clean.txt files found in the directory: {input_directory}")
         return
+
+    # Initialize the Anthropic client once and pass to threads  # {{ edit_4 }}
+    client = anthropic.Anthropic(api_key=api_key)
 
     # Process files concurrently
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_file = {
-            executor.submit(process_file, file_path): file_path for file_path in file_paths
+            executor.submit(process_file, file_path, client): file_path for file_path in file_paths
         }
-        for future in concurrent.futures.as_completed(future_to_file):
+        for future in as_completed(future_to_file):
             file_path = future_to_file[future]
             try:
                 future.result()
-                print(f"Finished processing {file_path}")
+                logging.info(f"Finished processing {file_path}")
             except Exception as exc:
-                print(f"{file_path} generated an exception: {exc}")
-    
-        # After processing all files, wait 1 second and start 4combine_1k.py
-        time.sleep(1)
-        subprocess.run(['python', 'bills/4combine_1k.py', input_directory])
+                logging.error(f"{file_path} generated an exception: {exc}")
+        
+    # After processing all files, wait 1 second and start 4combine_1k.py
+    time.sleep(1)
+    try:
+        subprocess.run(['python', 'bills/4combine_1k.py', input_directory], check=True)
+        logging.info(f"Started processing with 4combine_1k.py for directory: {input_directory}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to start 4combine_1k.py for directory {input_directory}: {e}")
 
-    print("All files have been processed.")
+    logging.info("All files have been processed.")
 
 if __name__ == "__main__":
     main()
