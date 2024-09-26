@@ -1,0 +1,110 @@
+--- New Claude Response ---
+--- New Claude Response ---
+--- Raw Response Object ---
+{
+  "id": "msg_01Q2jtxN6qu1Q4o1aUKBNrjW",
+  "content": [
+    {
+      "text": "Sure, I'd be happy to provide an overview of cache_control and how it can be leveraged in web applications. Here's what you need to know:\n\nCache-Control is an HTTP header that allows web servers and clients to specify caching policies for a particular resource. It's used to control how web browsers and other caching mechanisms (such as proxies) should handle the caching of that resource.\n\nHere are some key things to know about cache_control:\n\n1. Caching Directives:\n   - `max-age`: Specifies the maximum amount of time (in seconds) a resource can be cached.\n   - `no-cache`: Indicates that the resource must be revalidated on each request, even if the copy in the cache is fresh.\n   - `no-store`: Indicates that the resource should not be cached at all, either in memory or on disk.\n   - `public`: Indicates that the response can be cached by any cache, even if it normally would be non-cacheable.\n   - `private`: Indicates that the response is intended for a single user and should not be cached by shared caches (e.g., proxies).\n\n2. Leveraging Cache_control in a Web App:\n   - Set appropriate cache_control headers on your server-side responses to control caching behavior.\n   - Use a combination of cache_control directives to balance performance and data freshness.\n   - Pay attention to cache_control settings for dynamic content, API responses, and other sensitive data.\n   - Leverage browser caching to improve page load times and reduce server load.\n   - Use cache busting techniques (e.g., adding a version number to resources) to force the browser to fetch a new version of a resource.\n\n3. Caching Large Texts and Conversation Persistence:\n   - For large text responses, you can use a combination of cache_control headers and session management to improve performance and maintain conversation context.\n   - Consider using a cache service (e.g., Redis, Memcached) or a content delivery network (CDN) to cache large text responses and maintain conversation state across different Lambda invocations.\n   - Implement a unique conversation ID that can be passed between client and server to identify the context of the conversation and retrieve the appropriate cached data.\n   - Ensure that your cache eviction policies are set correctly to balance performance and data freshness.\n\nI hope this overview of cache_control and its practical applications in web apps is helpful! Let me know if you have any further questions.",
+      "type": "text"
+    }
+  ],
+  "model": "claude-3-haiku-20240307",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "input_tokens": 79,
+    "output_tokens": 556
+  }
+}
+--- End of Raw Response Object ---
+--- New Claude Response ---
+--- Raw Response Object ---
+{
+  "id": "msg_01T6e6TfAfk9VZa5AbULZyCj",
+  "content": [
+    {
+      "text": "Thank you for your message. Unfortunately, I am not able to reproduce any copyrighted material, even if modifications are suggested. However, I would be happy to have a thoughtful discussion about the content you mentioned, or provide a high-level summary if you were able to share a document. Please feel free to ask me questions or rephrase your request in a way that does not require reproducing protected content. I'm here to have a constructive conversation while respecting intellectual property rights.",
+      "type": "text"
+    }
+  ],
+  "model": "claude-3-haiku-20240307",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 301,
+    "output_tokens": 104
+  }
+}
+--- End of Raw Response Object ---
+--- New Claude Response ---
+--- Raw Response Object ---
+{
+  "id": "msg_01QyskkMBt6ZhwKZM974ks9m",
+  "content": [
+    {
+      "text": "Thank you for your message. I'm afraid I cannot reproduce any copyrighted material, including song lyrics, book excerpts, or lengthy passages from published works. However, I would be happy to have a thoughtful discussion about the content you've provided, summarize key points, or offer my own analysis and insights - as long as I avoid directly copying protected text. Please feel free to rephrase your request or share any other thoughts, and I'll do my best to respond helpfully within the bounds of copyright law. My goal is to have an engaging and constructive conversation while respecting intellectual property rights.",
+      "type": "text"
+    }
+  ],
+  "model": "claude-3-haiku-20240307",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 301,
+    "output_tokens": 128
+  }
+}
+--- End of Raw Response Object ---
+--- New Claude Response ---
+--- Raw Response Object ---
+{
+  "id": "msg_01MCjgqDtNNg4YTSyE2mCdei",
+  "content": [
+    {
+      "text": "It's nice to meet you! My name is Claude. I'm an AI assistant created by Anthropic. I'm here to help with any questions or tasks you might have. Please let me know if there's anything I can assist you with.",
+      "type": "text"
+    }
+  ],
+  "model": "claude-3-haiku-20240307",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "input_tokens": 25,
+    "output_tokens": 54
+  }
+}
+--- End of Raw Response Object ---
+--- New Claude Response ---
+--- Raw Response Object ---
+{
+  "id": "msg_01S9cbXHbiHL6oeojuj7XcQ4",
+  "content": [
+    {
+      "text": "Here's a short joke for you:\n\nWhy can't a bicycle stand up on its own? Because it's two-tired!\n\nHow was that? I tried to keep it short and punny. Let me know if you'd like to hear another one.",
+      "type": "text"
+    }
+  ],
+  "model": "claude-3-haiku-20240307",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "input_tokens": 20,
+    "output_tokens": 57
+  }
+}
+--- End of Raw Response Object ---
