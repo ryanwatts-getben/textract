@@ -5,7 +5,7 @@ import fitz
 import logging
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+import anthropic
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 image_media_type = "image/png"
@@ -17,76 +17,77 @@ sqs_client = boto3.client('sqs')
 MAX_WORKERS = int(os.environ.get("MAX_WORKERS", 10))
 RECORDS_CLEANUP_QUEUE = os.environ['RECORDS_CLEANUP_QUEUE']
 
-def send_sqs(bucket_name, file_path, file_name):
-    sqs_queue_url = f'https://sqs.us-east-1.amazonaws.com/461135439633/{RECORDS_CLEANUP_QUEUE}'
+# def send_sqs(bucket_name, file_path, file_name):
+#     sqs_queue_url = f'https://sqs.us-east-1.amazonaws.com/461135439633/{RECORDS_CLEANUP_QUEUE}'
     
-    user_id, case_id = file_path.split('/')[0:2]
-    message_body = {
-        'file_name': file_name,
-        'file_path': file_path,
-        'bucket': bucket_name,
-        'case_id': case_id,
-        'user_id': user_id,
-    }
-    logger.info(f"Sending SQS message to cleanup queue: {message_body}")
-    try:
-        response = sqs_client.send_message(
-            QueueUrl=sqs_queue_url,
-            MessageBody=json.dumps(message_body)
-        )
-        logger.info(f"SQS message sent successfully. MessageId: {response['MessageId']}")
-    except Exception as e:
-        logger.error(f"Failed to send SQS message: {str(e)}")
-        raise
+#     user_id, case_id = file_path.split('/')[0:2]
+#     message_body = {
+#         'file_name': file_name,
+#         'file_path': file_path,
+#         'bucket': bucket_name,
+#         'case_id': case_id,
+#         'user_id': user_id,
+#     }
+#     logger.info(f"Sending SQS message to cleanup queue: {message_body}")
+#     try:
+#         response = sqs_client.send_message(
+#             QueueUrl=sqs_queue_url,
+#             MessageBody=json.dumps(message_body)
+#         )
+#         logger.info(f"SQS message sent successfully. MessageId: {response['MessageId']}")
+#     except Exception as e:
+#         logger.error(f"Failed to send SQS message: {str(e)}")
+#         raise
 
-def process_with_claude(pdf_key, file_name, total_pages, extracted_text, image_media_type, img_bytes):
-    """
-    Send content and image data to Claude API and return the response.
-    """
-    response = client.beta.prompt_caching.messages.create(
-        model="claude-3-haiku-20240307",
-        temperature=0.3,
-        max_tokens=8192,
-        system="{environmentVariables.CLAUDE_PROMPT}" + pdf_key,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": image_media_type,
-                            "data": img_bytes,
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": file_name + "of" + total_pages + "pages" + extracted_text
-                    },
-                ]
-            },
-            {
-                "role": "assistant",
-                "content": '['
-            },
-        ],
-    )  
+# def process_with_claude(pdf_key, file_name, total_pages, extracted_text, image_media_type, img_bytes):
+#     """
+#     Send content and image data to Claude API and return the response.
+#     """
+#     client = anthropic.Anthropic()
+#     response = client.messages.create(
+#         model="claude-3-haiku-20240307",
+#         temperature=0.3,
+#         max_tokens=8192,
+#         system="{environmentVariables.CLAUDE_PROMPT}" + pdf_key,
+#         messages=[
+#             {
+#                 "role": "user",
+#                 "content": [
+#                     {
+#                         "type": "image",
+#                         "source": {
+#                             "type": "base64",
+#                             "media_type": image_media_type,
+#                             "data": img_bytes,
+#                         },
+#                     },
+#                     {
+#                         "type": "text",
+#                         "text": file_name + "of" + total_pages + "pages" + extracted_text
+#                     },
+#                 ]
+#             },
+#             {
+#                 "role": "assistant",
+#                 "content": '['
+#             },
+#         ],
+#     )  
 
-    # Extract the text content from the response
-    if isinstance(response.content, list):
-        cleaned_content = ''.join(
-            item.text if hasattr(item, 'text') else item.get('text', '')
-            for item in response.content
-        )
-    else:
-        cleaned_content = response.content
+#     # Extract the text content from the response
+#     if isinstance(response.content, list):
+#         cleaned_content = ''.join(
+#             item.text if hasattr(item, 'text') else item.get('text', '')
+#             for item in response.content
+#         )
+#     else:
+#         cleaned_content = response.content
 
-    # Ensure the content starts with '['
-    if not cleaned_content.startswith('['):
-        cleaned_content = '[' + cleaned_content
+#     # Ensure the content starts with '['
+#     if not cleaned_content.startswith('['):
+#         cleaned_content = '[' + cleaned_content
 
-    return cleaned_content
+#     return cleaned_content
 
 def process_page(page_num, pdf_document, bucket_name, output_prefix, filename):
     try:
@@ -135,40 +136,40 @@ def process_pdf(bucket_name, pdf_key, output_prefix):
 
     logger.info(f"All pages from {pdf_key} have been processed.")
 
-def handler(event, context):
-    logger.info("Lambda function started")
+# def handler(event, context):
+#     logger.info("Lambda function started")
     
-    try:
-        for record in event['Records']:
-            body = json.loads(record['body'])
-            logger.info(f'Processing SQS message: {body}')
+#     try:
+#         for record in event['Records']:
+#             body = json.loads(record['body'])
+#             logger.info(f'Processing SQS message: {body}')
             
-            bucket_name = body['bucket']
-            pdf_key = body['file_path']
-            user_id = body['user_id']
-            case_id = body['case_id']
-            file_name = body['file_name']
+#             bucket_name = body['bucket']
+#             pdf_key = body['file_path']
+#             user_id = body['user_id']
+#             case_id = body['case_id']
+#             file_name = body['file_name']
 
-            output_prefix = f"{user_id}/{case_id}/records/{file_name}"
-            logger.info(f"Output prefix: {output_prefix}")
+#             output_prefix = f"{user_id}/{case_id}/records/{file_name}"
+#             logger.info(f"Output prefix: {output_prefix}")
 
-            process_pdf(bucket_name, pdf_key, output_prefix)
+#             process_pdf(bucket_name, pdf_key, output_prefix)
 
-            details = process_with_claude(pdf_key, file_name, total_pages, extracted_text, image_media_type, img_bytes)
+#             # details = process_with_claude(pdf_key, file_name, total_pages, extracted_text, image_media_type, img_bytes)
 
-            # Send message to cleanup queue for split path
-            split_path = f"{user_id}/{case_id}/records/{file_name}/split/"
-            logger.info(f"Sending message to cleanup queue for split path: {split_path}")
-            send_sqs(bucket_name, split_path, file_name)
+#             # Send message to cleanup queue for split path
+#             split_path = f"{user_id}/{case_id}/records/{file_name}/split/"
+#             logger.info(f"Sending message to cleanup queue for split path: {split_path}")
+#             # send_sqs(bucket_name, split_path, file_name)
 
-        logger.info("PDF processing completed successfully")
-        return {
-            'statusCode': 200,
-            'body': json.dumps('PDF processing completed successfully')
-        }
-    except Exception as e:
-        logger.error(f"An error occurred while processing the PDFs: {str(e)}")
-        return {
-            'statusCode': 500,
-            'body': json.dumps(f'Error: {str(e)}')
-        }
+#         logger.info("PDF processing completed successfully")
+#         return {
+#             'statusCode': 200,
+#             'body': json.dumps('PDF processing completed successfully')
+#         }
+#     except Exception as e:
+#         logger.error(f"An error occurred while processing the PDFs: {str(e)}")
+#         return {
+#             'statusCode': 500,
+#             'body': json.dumps(f'Error: {str(e)}')
+#         }
