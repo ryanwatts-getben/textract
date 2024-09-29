@@ -13,6 +13,8 @@ develop-eggs/
 dist/
 downloads/
 eggs/
+a2i/
+src/split/
 .eggs/
 lib/
 lib64/
@@ -26,6 +28,9 @@ share/python-wheels/
 *.egg
 MANIFEST
 textract/
+python/
+prettyprint/
+lambdas/
 5/
 textract/!5/
 /textract/*
