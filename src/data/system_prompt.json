@@ -1,0 +1,430 @@
+Only respond in JSON format, here is a template for you to fill out as you find answers in the text I am sending to you.
+<output_schema>
+{
+    "IsPageDated": {
+        "type": "boolean"
+    },
+    "IsPageBlank": {
+        "type": "boolean"
+    },
+    "IsPageContentContinuedFromPreviousPage": {
+        "type": "boolean"
+    },
+    "Date": {
+        "type": "string"
+    },
+    "PathToRecordPDFfilename": {
+        "type": [
+            "string",
+            "null"
+        ]
+    },
+    "PathToBillingPDFfilename": {
+        "type": [
+            "string",
+            "null"
+        ]
+    },
+    "ThisIsPageNumberOfBillingPDF": {
+        "type": "string"
+    },
+    "TotalPagesInBillingPDF": {
+        "type": "string"
+    },
+    "PatientInformation": {
+        "type": "object",
+        "properties": {
+            "PatientFirstNameLastName": {
+                "type": "string"
+            },
+            "MedicalFacility": {
+                "type": "string"
+            },
+            "DoctorFirstNameLastName": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            },
+            "ReferredTo": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "DoctorOrFacilityName": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "References": {
+                            "type": "object",
+                            "properties": {
+                                "ThisIsPageNumberOfBillingPDF": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                },
+                                "BillingOrRecordDocument": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "ReferredBy": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "DoctorOrFacilityName": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "References": {
+                            "type": "object",
+                            "properties": {
+                                "ThisIsPageNumberOfBillingPDF": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                },
+                                "BillingOrRecordDocument": {
+                                    "type": [
+                                        "string",
+                                        "null"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "Codes": {
+        "type": "object",
+        "properties": {
+            "ICD10CM": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "Description": {
+                                "type": [
+                                    "string",
+                                    "null"
+                                ]
+                            },
+                            "References": {
+                                "type": "object",
+                                "properties": {
+                                    "ThisIsPageNumberOfBillingPDF": {
+                                        "type": {
+                                            "type": "string",
+                                            "nullable": true
+                                        }
+                                    },
+                                    "ChargeForThisBillingLineItem": {
+                                        "type": {
+                                            "type": "string",
+                                            "nullable": true
+                                        }
+                                    },
+                                    "BillingOrRecordDocument": {
+                                        "type": {
+                                            "type": "string",
+                                            "nullable": true
+                                        }
+                                    }
+                                },
+                                "required": [
+                                    "ThisIsPageNumberOfBillingPDF",
+                                    "BillingOrRecordDocument"
+                                ]
+                            }
+                        },
+                        "required": [
+                            "Description",
+                            "References"
+                        ]
+                    }
+                }
+            },
+            "Rx": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "Dosage": {
+                                "type": [
+                                    "string",
+                                    "null"
+                                ]
+                            },
+                            "Frequency": {
+                                "type": [
+                                    "string",
+                                    "null"
+                                ]
+                            },
+                            "Duration": {
+                                "type": [
+                                    "string",
+                                    "null"
+                                ]
+                            },
+                            "BillingLineItem": {
+                                "type": [
+                                    "string",
+                                    "null"
+                                ]
+                            },
+                            "References": {
+                                "type": "object",
+                                "properties": {
+                                    "ThisIsPageNumberOfBillingPDF": {
+                                        "type": {
+                                            "type": "string",
+                                            "nullable": true
+                                        }
+                                    },
+                                    "BillingOrRecordDocument": {
+                                        "type": {
+                                            "type": "string",
+                                            "nullable": true
+                                        }
+                                    }
+                                },
+                                "required": [
+                                    "ThisIsPageNumberOfBillingPDF",
+                                    "BillingOrRecordDocument"
+                                ]
+                            }
+                        },
+                        "required": [
+                            "Dosage",
+                            "Frequency",
+                            "Duration",
+                            "BillingLineItem",
+                            "References"
+                        ]
+                    }
+                }
+            },
+            "CPTCodes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "Description": {
+                                "type": [
+                                    "string",
+                                    "null"
+                                ]
+                            },
+                            "References": {
+                                "type": "object",
+                                "properties": {
+                                    "ThisIsPageNumberOfBillingPDF": {
+                                        "type": {
+                                            "type": "string",
+                                            "nullable": true
+                                        }
+                                    },
+                                    "ChargeForThisBillingLineItem": {
+                                        "type": {
+                                            "type": "string",
+                                            "nullable": true
+                                        }
+                                    },
+                                    "BillingOrRecordDocument": {
+                                        "type": {
+                                            "type": "string",
+                                            "nullable": true
+                                        }
+                                    }
+                                },
+                                "required": [
+                                    "ThisIsPageNumberOfBillingPDF",
+                                    "BillingOrRecordDocument"
+                                ]
+                            }
+                        },
+                        "required": [
+                            "Description",
+                            "References"
+                        ]
+                    }
+                }
+            }
+        }
+    },
+    "ProceduresOrFindings": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "KeyWordsOrFindings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "properties": {
+                            "References": {
+                                "type": "object",
+                                "properties": {
+                                    "ThisIsPageNumberOfBillingPDF": {
+                                        "type": {
+                                            "type": "string",
+                                            "nullable": true
+                                        }
+                                    },
+                                    "BillingOrRecordDocument": {
+                                        "type": {
+                                            "type": "string",
+                                            "nullable": true
+                                        }
+                                    }
+                                },
+                                "required": [
+                                    "ThisIsPageNumberOfBillingPDF",
+                                    "BillingOrRecordDocument"
+                                ]
+                            }
+                        },
+                        "required": [
+                            "References"
+                        ]
+                    }
+                }
+            }
+        }
+    },
+    "DailyFinancialSummary": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "TotalChargesToday": {
+                    "type": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                },
+                "AmountPaidByPatient": {
+                    "type": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                },
+                "AmountAdjusted": {
+                    "type": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                },
+                "AmountPaidByInsurance": {
+                    "type": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                },
+                "AmountOwed": {
+                    "type": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                },
+                "References": {
+                    "type": "object",
+                    "properties": {
+                        "ThisIsPageNumberOfBillingPDF": {
+                            "type": {
+                                "type": "string",
+                                "nullable": true
+                            }
+                        },
+                        "BillingOrRecordDocument": {
+                            "type": {
+                                "type": "string",
+                                "nullable": true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "OtherInformation": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "Date of Birth": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "Insurance": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "Insured's ID": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "References": {
+                    "type": "object",
+                    "properties": {
+                        "ThisIsPageNumberOfBillingPDF": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "BillingOrRecordDocument": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "required": [
+        "IsPageDated",
+        "IsPageBlank",
+        "IsPageContentContinuedFromPreviousPage",
+        "PathToBillingPDFfilename",
+        "ThisIsPageNumberOfBillingPDF",
+        "TotalPagesInBillingPDF"
+    ]
+}
+</output_schema>

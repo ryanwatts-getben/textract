@@ -1,0 +1,281 @@
+<scratchpad>Consider the problem of multiple dates on the same page and your goal is to locate the Date of Service and differentiate between perhaps a date of birth listed or a date a form was electronically signed, it isn't easy. So help yourself and find the dates first, all of them on the page if there are any. If there are multiple dates of service listed on a bill or record, then create its own object in an array to differentiate between them. Then think and classify each one and ask yourself "is this the date of service?" Don't force the Date:, I would rather have a missing date than an incorrect date of service. The image I have attached is for you to use along side the extracted text in <input_ocr_text></input_ocr_text>. That is the text that Amazon AWS Textract was able to extract, so if you cannot see something on the image, refer to the <input_ocr_text></input_ocr_text> to help you determine what the word or phrase is. Remember your system prompt and look for relevant keywords in the image and text. Also, before you respond, consider your response. Is your response purely a parsable JSON object represented in the <system></system>? It should only be JSON, no need to tell me you've started, no need to summarize, it will break our downstream processes if you respond with anything other than valid JSON</scratchpad>Can you find the date of service on this medical bill? Page 1 of 6 pages for billing file name "orthosc-bills.pdf" If the page appears to be an orphan off of a larger subset of pages or it has a very small amount of text and a large amount of white space then you should mark "IsPageContentContinuedFromPreviousPage" as true.
+<input_ocr_text>
+MARRICK
+4950 S YOSEMITE ST
+F2 #514
+HEALTH INSURANCE CLAIM FORM
+GREENWOOD VILLAGE, CO 801111349
+APPROVED BY NATIONAL UNIFORM CLAIM COMMITTEE (NUCC) 02/12
+PICA
+XIXIX
+PICA
+1. MEDICARE
+MEDICAID
+TRICARE
+CHAMPVA
+GROUP
+FECA
+OTHER
+1a INSURED'S 10 NUMBER
+(For Program in EXIT 1)
+HEALTH PLAN
+BLK LUNG
+(Medicare
+(Macheald)
+(ID#/DoOk)
+(Member ID
+004
+GOOD
+00m
+4864956
+2 PATIENT'S NAME (Last Name First Name Middle Initial
+3 PATIENT BIRTH DATE
+SEX
+4 INSURED'S NAME (Last Name First Name Middle Initial
+ALLEN AUTUMN
+12 21 2004
+X
+ALLEN AUTUMN
+5 PATIENT'S ADDRESS No Street
+6 PATIENT RELATIONSHIP TO INSURED
+7 INSURED'S ADDRESS (No. Street)
+1345 SIOUX SWAMP DR
+Sell
+X
+Spouse
+Chlo
+Other
+1345 SIOUX SWAMP DR
+CITY
+STATE
+R RESERVED FOR NUCC USE
+CITY
+STATE
+CONWAY
+SC
+CONWAY
+SC
+ZIP CODE
+TELEPHONE Include Area Code
+ZIP CODE
+TELEPHONE (Include Area Code)
+295273442
+( 843 5160982
+295273442
+( 843 5160982
+9 OTHER INSURED S NAME (Last Name First Name Middle Initial
+10 IS PATIENT'S CONDITION RELATED TO
+11 INSURED'S POLICY GROUP OR FECA NUMBER
+a OTHER INSURED POLICY OR GROUP NUMBER
+a EMPLOYMENT? (Current or Previous)
+a INSURED DATE OF BIRTH
+SEX
+MM
+DO
+W
+YES
+X
+NO
+12 21 2004
+M
+X
+b RESERVED FOR NUOC USE
+b AUTO ACCIDENT?
+PLACE (State)
+b. OTHER CLAIM ID (Designated by NUCC)
+YES
+NO
+SC
+c. RESERVED FOR NUCC USE
+c OTHER ACCIDENT?
+c INSURANCE PLAN NAME OR PROGRAM NAME
+YES
+NO
+MARRICK
+d INSURANCE PLAN NAME OR PROGRAM NAME
+105 CLAIM CODES Designated by NUCC)
+d IS THERE ANOTHER HEAL TH BENEFIT PLAN?
+YES
+X
+NO
+If yes complete items 9 9a and Dd
+READ BACK OF FORM BEFORE COMPLETING & SIGNING THIS FORM
+13 INSURED'S OR AUTHORIZED PERSON'S SIGNATURE authorize
+12 PATIENT'S OR AUTHORIZED PERSONS SIGNATURE authorize the release of any medical other information
+necessary
+payment of medical benefit to the undersigned physician or supplies for
+to process this cloim also request payment of government benefits other * myself OF to the party who accepts assignment
+services described below
+below
+SKINED
+SIGNATURE ON FILE
+DATE
+03 30 2024
+SIGNATURE ON FILE
+SIGNED
+14 DATE OF CURRENT ILLNESS INJURY or PREGNANCY (MP)
+16 OTHER DATE
+16 DATES PATIENT UNABLE TO WORK IN CURRENT OCCUPATION
+ou
+MM
+DD
+YY
+MM
+DD
+MM
+DD
+YY
+01
+25 2024 QUAL 431
+QUAL
+439
+01
+25
+2024
+FROM
+TO
+17. NAME OF REFERRING PROVIDER OR OTHER SOURCE
+17a
+18 HOSPIT ALIZATION DATES RELATED TO CURRENT SERVICES
+MM
+DD
+MM
+00
+YY
+170
+NP
+FROM
+TO
+19 ADDITIONAL CLAIM INFORMATION (Designated by NUCCI
+20 OUTSIDE LABY
+$ CHARGES
+YES
+X
+NO
+21 DIAGNOSIS OR NATURE OF ILLNESS OR INJURY Relate A4 to service line below (248)
+ICD and
+0
+22 GEST JBMISSION
+CODE
+ORIGINAL REF NO
+A
+M5450
+M546
+S39012A
+n
+c
+D.
+23 PROCE AUTHORIZATION NUMBER
+E
+F
+a
+H.
+1.
+J
+K
+24 A
+DATE(S) OF SERVICE
+B
+c
+D PROCEDURES SERVICES OR SUPPLIES
+E
+F
+H.
+I
+From
+To
+PLACE OF
+(Explain Unusual Circumstances)
+DIAGNOSIS
+-
+RENDERING
+MM
+DD
+YY
+MM
+DO
+YY
+SERVICE
+EMG
+CPT/MCPCS
+MCDIEF
+POINTER
+CHARGES
+QUAL
+PROVIDER
+1
+03 27 24
+03
+27
+24
+11
+99205
+ABC
+772 00 1
+NP
+1235302969
+2
+03 27 24 03 27 2411
+72110
+A
+175 00 1
+NPI
+1235302969
+3
+03 27 24 03 27 2411
+72070
+B
+114 00 1
+NP
+1235302969
+4
+NP
+5
+NPI
+6
+NP
+25 FEDERAL TAX I.D. NUMBER
+SSN EIN
+25 PATIENT'S S ACCOUNT NO
+27 ACCEPT ASSIGNMENT
+28 TOTAL CHARGE
+29 AMOUNT PAID
+30 Rsvd for NUCC Use
+822962394
+X
+1476326V17161
+YES
+NO
+$
+1061
+00
+$
+0
+00
+1061 00
+31 SIGNATURE OF PHYSICIAN OR SUPPLIER
+32 SERVICE FACILITY LOCATION INFORMATION
+33 BILLING PROVIDER NFO APH
+)
+INCLUDING DEGREES OR CREDENT
+0 certify that the statements on the DEVERSE
+ORTHOSC, LLC
+ORTHOSC LLC
+NI and are thereof.)
+2376 CYPRESS CIRCLE
+PO BOX 22611
+ERKAN ALCI, MD
+CONWAY SC 295268995
+BELFAST ME 049154477
+SIGNED
+03 30 2024
+DATE
+1861902728
+1861902728
+NUCC Instruction Manual available at www.nucc.org
+PLEASE PRINT OR TYPE
+APPROVED OMB-0938-1197 FORM 1500 (02-12)
+DOCUMENT
+1476326
+</input_ocr_text>
+}

@@ -1,0 +1,263 @@
+<scratchpad>Consider the problem of multiple dates on the same page and your goal is to locate the Date of Service and differentiate between perhaps a date of birth listed or a date a form was electronically signed, it isn't easy. So help yourself and find the dates first, all of them on the page if there are any. If there are multiple dates of service listed on a bill or record, then create its own object in an array to differentiate between them. Then think and classify each one and ask yourself "is this the date of service?" Don't force the Date:, I would rather have a missing date than an incorrect date of service. The image I have attached is for you to use along side the extracted text in <input_ocr_text></input_ocr_text>. That is the text that Amazon AWS Textract was able to extract, so if you cannot see something on the image, refer to the <input_ocr_text></input_ocr_text> to help you determine what the word or phrase is. Remember your system prompt and look for relevant keywords in the image and text. Also, before you respond, consider your response. Is your response purely a parsable JSON object represented in the <system></system>? It should only be JSON, no need to tell me you've started, no need to summarize, it will break our downstream processes if you respond with anything other than valid JSON</scratchpad>Can you find the date of service on this medical bill? Page 2 of 6 pages for billing file name "orthosc-bills.pdf" If the page appears to be an orphan off of a larger subset of pages or it has a very small amount of text and a large amount of white space then you should mark "IsPageContentContinuedFromPreviousPage" as true.
+<input_ocr_text>
+MARRICK
+4950 S YOSEMITE ST
+F2 #514
+HEALTH INSURANCE CLAIM FORM
+GREENWOOD VILLAGE, CO 801111349
+APPROVED BY NATIONAL UNIFORM CLAIM COMMITTEE (NUCC) 00/12
+viviviPiCA
+XIXIX
+PICA
+1. MEDICARE
+MEDICAID
+TRICARE
+CHAMPVA
+GROUP
+FECA
+OTHER
+12 INSURED'S 10 NUMBER
+(For Program term 1)
+HEAL THPLAN
+BLK LUNG
+(Medicare#)
+(Macheald#)
+(ID#/DoOk)
+(Mumbar DE
+(X3#)
+(OF)
+4864956
+2 PATIENT'S NAME (Last Name First Name Middle Initial)
+3. PATIENT BIRTH DATE
+SEX
+4 INSURED'S NAME Last Name First Name Middle Initial)
+ALLEN AUTUMN
+12 21 2004
+X
+ALLEN AUTUMN
+5 PATIENT'S ADDRESS No. Street
+6 PATIENT RELATIONSHIP TO INSURED
+7 INSURED'S ADDRESS (No. Street)
+1345 SIOUX SWAMP DR
+Self
+X
+Spouse
+Child
+Other
+1345 SIOUX SWAMP DR
+CITY
+STATE
+8 RESERVED FOR NUCC USA
+CITY
+STATE
+CONWAY
+SC
+CONWAY
+SC
+ZIP CODE
+TELEPHONE Include Area Code)
+ZIP CODE
+TELEPHONE (Include Area Code
+295273442
+( 843 5160982
+295273442
+(
+843 5160982
+9. OTHER INSURED S NAME (Last Name First Name Middle initial
+10 is PATIENT'S CONDITION RELATED TO:
+11 INSURED'S POLICY GROUP OF FECA NUMBER
+a OTHER INSURED'S POLICY OR GROUP NUMBER
+a EMPLOYMENT (Current or Previous
+a INSURED'S DATE OF BIRTH
+SEX
+MM
+DC
+YY
+YES
+X
+NO
+12 21 2004
+M
+X
+b. RESERVED FOR NUCC USE
+b AUTO ACCIDENT?
+PLACE (State)
+D. OTHER CLAIM ID (Designated by NUCC)
+YES
+NO
+SC
+c. RESERVED FOR NUCC USE
+. OTHER ACCIDENT?
+c. INSURANCE LAN NAME OR PROGRAM NAME
+YES
+NO
+MARRICK
+d INSURANCE PLAN NAME OR PROGRAM NAME
+10d CLAIM CODES Designated by NUCC)
+d IS THERE ANOTHER HEAL TH BENEFIT PLAN?
+YES
+NO
+If yea complete items 9 9a and Dd
+READ BACK OF FORM BEFORE COMPLETING & SIGNING THIS FORM
+13 INSURED'S on AUTHORIZED PERSON'S SIGNATURE authorize
+12. PATIENT'S OR AUTHORIZED PERSON'S SIGNATURE authorize the release of any medical or other information necessary
+payment of medico benefits to the undersigned physician or supplies for
+to process this claim also request payment of government benefits either to myself or to The party who accepts assignment
+services described below
+below.
+SKINED
+SIGNATURE ON FILE
+DATE
+05 14 2024
+SIGNED SIGNATURE ON FILE
+14 DATE OF CURRENT ILLNESS INJURY or PREGNANCY (LMP)
+15 OTHER DATE
+16 DATES PATIENT UNABLE TO WORK IN CURRENT OCCUPATION
+MM
+ARE
+DD
+YY
+MM
+DD
+YY
+MM
+or
+YY
+01
+25 2024 QUAL 431
+QUAL
+439
+01
+25
+2024
+FROM
+TO
+17 NAME OF REFERRING PROVIDER OF OTHER SOURCE
+17a
+18 HOSPIT LIZATION DATES RELATED TO CURRENT SERVICES
+MM
+on
+YY
+MM
+DD
+170
+NP
+FROM
+TO
+19 ADDITIONAL CLAIM INFORMATION (Designated by NUCC)
+20 OUTSIDE LAB
+$ CHARGES
+YES
+X
+NO
+21 DIAGNOSIS OF NATURE OF ILLNESS OR INJURY Reben A-L to service line below (24E)
+- Ind
+0
+22 GCSL UBMISSION
+CODE
+ORIGINAL REF NO
+A
+M5136
+n
+c
+D
+23 PRIOR AUTHORIZATION NUMBER
+F
+F
+0
+H
+1.
+J
+K
+12212004
+24 A
+DATE(S) OF SERVICE
+B
+c
+D PROCEDURES SERVICES OR SUPPLIES
+E
+F
+H.
+I
+From
+To
+PLACE OF
+(Explain Unural Circumstances
+DIAGNOSIS
+ID
+RENDERING
+MM
+on
+YY
+MM
+DO
+YY
+SERVICE
+EMG
+CPT/MCPCS
+INCOPER
+POINTER
+SCHARGES
+OUN
+PROVIDER D
+1
+05 09 24 05 09 24 11
+72148
+A
+1402 00
+1
+NPI
+1235302969
+2
+NPI
+3
+NPI
+4
+NPI
+5
+NPI
+6
+NPI
+25 FEDERAL TAX I.D. NUMBER
+SSN EIN
+25 PATIENT'S $ ACCOUNT NO
+27 ACCEPT ASSIGNMENT
+28 TOTAL CHARGE
+29 AMOUNT PAID
+30 Rsad for NUCC Use
+822962394
+X
+1516860V17161
+YES
+NO
+$
+1402
+00
+$
+0
+00
+1402 00
+31 SIGNATURE OF PHYSICIAN OR SUPPLIER
+32 SERVICE FACILITY LOCATION INFORMATION
+33 BILLING PROVIDER NFO&PH
+CLUDING DEGREES OR CREDENTIALS
+0 certify that the statements on the revenue
+ORTHOSC, LLC
+ORTHOSC LLC
+this bill and are made part thereof.)
+235 SINGLETON RIDGE ROAD
+PO BOX 22611
+ERKAN ALCI, MD
+CONWAY SC 295269136
+BELFAST ME 049154477
+SIGNED
+05 14 2024
+DATE
+1861902728
+'1861902728
+NUCC Instruction Manual available at www.nucc.org
+PLEASE PRINT OR TYPE
+APPROVED OMB-0938-1197 FORM 1500 (02-12)
+DOCUMENT
+1516860
+</input_ocr_text>
