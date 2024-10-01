@@ -224,6 +224,35 @@ def process_and_merge_files(bucket_name, user_id, case_id, output_prefix):
 
         merged_data = merge_json_complex(all_data)
 
+        # Update PageNumber in References for ICD10CM, Rx, CPT, and other elements
+        if 'Codes' in merged_data:
+            for code_type in ['ICD10CM', 'Rx', 'CPTCodes']:
+                if code_type in merged_data['Codes']:
+                    for item in merged_data['Codes'][code_type]:
+                        if isinstance(item, dict):
+                            for code, details in item.items():
+                                if isinstance(details, dict) and 'References' in details:
+                                    if isinstance(details['References'], dict) and 'ThisIsPageNumberOfPDF' in details['References']:
+                                        details['References']['PageNumber'] = details['References'].pop('ThisIsPageNumberOfPDF')
+
+        # Update PageNumber in References for ProceduresOrFindings
+        if 'ProceduresOrFindings' in merged_data:
+            for item in merged_data['ProceduresOrFindings']:
+                if isinstance(item, dict) and 'KeyWordsOrFindings' in item:
+                    for finding in item['KeyWordsOrFindings']:
+                        if isinstance(finding, dict):
+                            for _, details in finding.items():
+                                if isinstance(details, dict) and 'References' in details:
+                                    if isinstance(details['References'], dict) and 'ThisIsPageNumberOfPDF' in details['References']:
+                                        details['References']['PageNumber'] = details['References'].pop('ThisIsPageNumberOfPDF')
+
+        # Update PageNumber in References for OtherInformation
+        if 'OtherInformation' in merged_data:
+            for item in merged_data['OtherInformation']:
+                if isinstance(item, dict) and 'References' in item:
+                    if isinstance(item['References'], dict) and 'ThisIsPageNumberOfPDF' in item['References']:
+                        item['References']['PageNumber'] = item['References'].pop('ThisIsPageNumberOfPDF')
+
         if merged_data:
             output_key = f"{output_prefix}{date}.json"
             try:
@@ -233,7 +262,6 @@ def process_and_merge_files(bucket_name, user_id, case_id, output_prefix):
                 logger.error(f"Error saving merged file for date {date}: {str(e)}")
 
     return len(all_files_by_date) > 0
-
 def main(input_json):
     try:
         data = json.loads(input_json)
