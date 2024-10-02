@@ -2,7 +2,7 @@ import json
 import os
 import re
 import logging
-import fitz
+from datetime import datetime
 from collections import defaultdict
 import sys
 import subprocess
@@ -151,7 +151,11 @@ def main(input_directory):
     
     # Trigger the next step
     logger.info("Triggering 3details.py")
-    subprocess.run(['python', '3details.py', next_step_input], check=True)
+    try:
+        subprocess.run(['python', '3details.py', next_step_input], check=True)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error executing 3details.py: {e}")
+        sys.exit(1)
 
     logger.info("Processing completed successfully")
 
