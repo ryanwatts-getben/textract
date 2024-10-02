@@ -171,6 +171,8 @@ def extract_date_from_filename(filename):
     """
     match = re.search(r'records_(\d{4}-\d{2}-\d{2})\.json', filename)
     if not match:
+        match = re.search(r'bills_(\d{4}-\d{2}-\d{2})\.json', filename)
+    if not match:
         match = re.search(r'(\d{4}-\d{2}-\d{2})\.json', filename)
     if match:
         return match.group(1)
@@ -210,7 +212,7 @@ def process_and_merge_files(input_directory, output_directory):
     # Walk through the input directory to find .txt files
     for root, _, files in os.walk(input_directory):
         for file in files:
-            if file.endswith('.txt'):
+            if file.endswith('.json'):
                 file_path = os.path.join(root, file)
                 date = extract_date_from_filename(file)
                 if date:
