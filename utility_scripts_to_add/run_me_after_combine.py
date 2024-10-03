@@ -34,51 +34,35 @@ def merge_json_complex(data_list):
     Merge a list of JSON objects, handling nested structures and duplicates.
     """
     def merge_two(data1, data2):
-        # Merge two JSON objects
         if isinstance(data1, dict) and isinstance(data2, dict):
             result = deepcopy(data1)
             for key, value in data2.items():
                 if key in result:
-                    # Handle merging of simple types
-                    if isinstance(result[key], (str, int, float)) and isinstance(value, (str, int, float)):
-                        if result[key] != value and key != "name":
-                            result[key] = [str(result[key]), str(value)]
-                    # Handle merging of lists
-                    elif isinstance(result[key], list) and isinstance(value, list):
-                        merged_list = []
-                        seen = set()
-                        for item in result[key] + value:
-                            if isinstance(item, dict):
-                                # Serialize dict to a JSON string for uniqueness
-                                item_serialized = json.dumps(item, sort_keys=True)
-                                if item_serialized not in seen:
-                                    seen.add(item_serialized)
-                                    merged_list.append(item)
-                            else:
-                                if item not in seen:
-                                    seen.add(item)
-                                    merged_list.append(item)
-                        result[key] = merged_list
-                    else:
-                        result[key] = merge_two(result[key], value)
+                    result[key] = merge_two(result[key], value)
                 else:
                     result[key] = deepcopy(value)
             return result
         elif isinstance(data1, list) and isinstance(data2, list):
-            # Merge lists with unique items
-            merged_list = []
-            seen = set()
-            for item in data1 + data2:
-                if isinstance(item, dict):
-                    item_serialized = json.dumps(item, sort_keys=True)
-                    if item_serialized not in seen:
-                        seen.add(item_serialized)
+            if all(isinstance(item, dict) for item in data1 + data2):
+                # Merge list of dictionaries based on unique keys
+                merged_dict = {}
+                for item in data1 + data2:
+                    if isinstance(item, dict):
+                        # Assume each dict has a unique key (e.g., the code)
+                        for unique_key, content in item.items():
+                            if unique_key in merged_dict:
+                                merged_dict[unique_key] = merge_two(merged_dict[unique_key], content)
+                            else:
+                                merged_dict[unique_key] = deepcopy(content)
+                # Convert the merged dict back to a list of dicts
+                return [{k: v} for k, v in merged_dict.items()]
+            else:
+                # For lists of non-dict items, merge and remove duplicates without using set()
+                merged_list = []
+                for item in data1 + data2:
+                    if item not in merged_list:
                         merged_list.append(item)
-                else:
-                    if item not in seen:
-                        seen.add(item)
-                        merged_list.append(item)
-            return merged_list
+                return merged_list
         else:
             return data2 if is_valid_json_value(data2) else data1
 
@@ -209,7 +193,7 @@ def process_and_merge_files(input_directory, output_directory):
     """
     all_files_by_date = {}
     
-    # Walk through the input directory to find .txt files
+    # Walk through the input directory to find .json files
     for root, _, files in os.walk(input_directory):
         for file in files:
             if file.endswith('.json'):
