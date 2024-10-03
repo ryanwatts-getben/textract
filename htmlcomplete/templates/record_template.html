@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <style>
+        .badge {
+          display: inline-block;
+          padding: 0.25em 0.4em;
+          font-size: 75%;
+          font-weight: 700;
+          color: #fff;
+          background-color: #007bff;
+          border-radius: 0.25rem;
+          text-decoration: none;
+        }
+        .code-section {
+          margin-bottom: 20px;
+        }
+        ul {
+          list-style: none;
+          padding-left: 0;
+        }
+        li {
+          margin-bottom: 10px;
+        }
+        .code-columns {
+          display: flex;
+          gap: 20px;
+        }
+        .section {
+          flex: 1;
+        }
+        .section-header {
+          font-weight: bold;
+          margin-bottom: 10px;
+        }
+        .section-content {
+          border: 1px solid #ddd;
+          padding: 10px;
+          border-radius: 5px;
+        }
+      </style>
+    <meta charset="UTF-8">
+    <title>Medical Record - {{ date }}</title>
+    <link rel="stylesheet" href="../styles/record_styles.css">
+</head>
+<body>
+    <div class="visit-header">
+        <h1>Medical Record</h1>
+        <div class="patient-info">
+            {% if patient_information.PatientFirstNameLastName %}
+            <div class="patient-info-item"><strong>Name:</strong> {{ patient_information.PatientFirstNameLastName }}</div>
+            {% endif %}
+            {% if patient_information.Age %}
+            <div class="patient-info-item"><strong>Age:</strong> {{ patient_information.Age }}</div>
+            {% endif %}
+            {% if date %}
+            <div class="patient-info-item"><strong>Date of Service:</strong> {{ date }}</div>
+            {% endif %}
+            {% if patient_information.MedicalFacility %}
+            <div class="patient-info-item"><strong>Medical Facility:</strong> {{ patient_information.MedicalFacility }}</div>
+            {% endif %}
+            {% if patient_information.DoctorFirstNameLastName %}
+            <div class="patient-info-item"><strong>Doctor(s):</strong> {{ patient_information.DoctorFirstNameLastName | join(', ') }}</div>
+            {% endif %}
+            {% if patient_information.ReferredBy %}
+            <div class="patient-info-item"><strong>Referred By:</strong> {{ patient_information.ReferredBy | join(', ') }}</div>
+            {% endif %}
+            {% if patient_information.ReferredTo %}
+            <div class="patient-info-item"><strong>Referred To:</strong> {{ patient_information.ReferredTo | join(', ') }}</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="code-columns">
+        {% if codes.ICD10CM %}
+          <div class="section">
+            <div class="section-header">ICD-10-CM Codes</div>
+            <div class="section-content">
+              {% for code in codes.ICD10CM %}
+                {% for code_key, code_value in code.items() %}
+                  <div class="code-item">
+                    <strong>{{ code_key }}:</strong> {{ code_value.Description }}
+                    {% if code_value.References %}
+                      <div class="references">
+                        <strong>References:</strong>
+                        {% if code_value.References.ThisIsPageNumberOfPDF is defined %}
+                          <a href="/{{ code_value.References.PathToFilenamePDF }}#{{ code_value.References.ThisIsPageNumberOfPDF }}" class="badge">Page {{ code_value.References.ThisIsPageNumberOfPDF }}</a>
+                        {% endif %}
+                      </div>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              {% endfor %}
+            </div>
+          </div>
+        {% endif %}
+      
+        {% if codes.Rx %}
+          <div class="section">
+            <div class="section-header">Prescriptions</div>
+            <div class="section-content">
+              {% for rx in codes.Rx %}
+                {% for rx_name, rx_details in rx.items() %}
+                  <div class="rx-item">
+                    <strong>{{ rx_name }}</strong>
+                    {% if rx_details is mapping %}
+                      <ul>
+                        {% for detail_key, detail_value in rx_details.items() %}
+                          <li><strong>{{ detail_key }}:</strong> {{ detail_value }}</li>
+                        {% endfor %}
+                      </ul>
+                    {% else %}
+                      <p>{{ rx_details }}</p>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              {% endfor %}
+            </div>
+          </div>
+        {% endif %}
+      
+        {% if codes.CPTCodes %}
+          <div class="section">
+            <div class="section-header">CPT Codes</div>
+            <div class="section-content">
+              {% for cpt in codes.CPTCodes %}
+                {% for cpt_code, cpt_details in cpt.items() %}
+                  <div class="cpt-item">
+                    <strong>{{ cpt_code }}:</strong> {{ cpt_details.Description }}
+                    {% if cpt_details.References %}
+                      <div class="references">
+                        <strong>References:</strong>
+                        {% if cpt_details.References.ThisIsPageNumberOfPDF is defined %}
+                          <a href="/{{ cpt_details.References.PathToFilenamePDF }}#{{ cpt_details.References.ThisIsPageNumberOfPDF }}" class="badge">Page {{ cpt_details.References.ThisIsPageNumberOfPDF }}</a>
+                        {% endif %}
+                      </div>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              {% endfor %}
+            </div>
+          </div>
+        {% endif %}
+      </div>
+      
+
+    {% if procedures_or_findings %}
+    <div class="section">
+        <div class="section-header">Procedures or Findings</div>
+        <div class="section-content">
+            {% for procedure in procedures_or_findings %}
+                <div class="timeline-item">
+                    {% if procedure.KeyWordsOrFindings %}
+                        {% for item in procedure.KeyWordsOrFindings %}
+                            {% for key, value in item.items() %}
+                            <div class="finding-item">
+                                <strong>{{ key }}</strong>
+                                {% if value is mapping %}
+                                    {% if 'Chemistry' in value or 'LabResults' in value %}
+                                        <table class="lab-results">
+                                            <thead>
+                                                <tr>
+                                                    <th>Test</th>
+                                                    <th>Result</th>
+                                                    <th>Reference Range</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% for test, result in value.items() %}
+                                                    {% if test != 'References' %}
+                                                        <tr>
+                                                            <td>{{ test }}</td>
+                                                            {% if result is mapping %}
+                                                                <td>{{ result.Result }}</td>
+                                                                <td>{{ result.Range }}</td>
+                                                            {% else %}
+                                                                <td>{{ result }}</td>
+                                                                <td></td>
+                                                            {% endif %}
+                                                        </tr>
+                                                    {% endif %}
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    {% else %}
+                                        <ul>
+                                            {% for detail_key, detail_value in value.items() %}
+                                            <li><strong>{{ detail_key }}:</strong> {{ detail_value }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    {% endif %}
+                                {% else %}
+                                    <p>{{ value }}</p>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        {% endfor %}
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if daily_financial_summary %}
+    <div class="section">
+        <div class="section-header">Daily Financial Summary</div>
+        <div class="section-content">
+            <ul>
+            {% for item in daily_financial_summary %}
+                {% for key, value in item.items() %}
+                <li><strong>{{ key }}:</strong> {{ value }}</li>
+                {% endfor %}
+            {% endfor %}
+            </ul>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if other_information %}
+    <div class="section">
+        <div class="section-header">Other Information</div>
+        <div class="section-content">
+            {% for item in other_information %}
+                {% for key, value in item.items() %}
+                    {% if key != 'References' %}
+                    <div class="other-info-item">
+                        <strong>{{ key }}:</strong> {{ value }}
+                    </div>
+                    {% endif %}
+                {% endfor %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</body>
+</html>
