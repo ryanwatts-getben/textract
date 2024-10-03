@@ -1,148 +1,33 @@
 import json
 import os
-import re
 import logging
+import boto3
+import re
 from datetime import datetime
-from collections import defaultdict
+from botocore.exceptions import ClientError
+from copy import deepcopy
 import sys
-import subprocess
 
-# Set up logging configuration to display messages with timestamps and severity levels
+"""
+This script should be run after the combine step. It DOES merge the records into a single file per date, with the child properties persisting as a list
+"""
+
+# Set up logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def extract_first_date_from_content(content):
-    """
-    Extract the first date from the content using regex patterns.
-    Standardizes the date to the format YYYY-MM-DD.
-    """
-    # Define regex patterns for different date formats
-    date_patterns = [
-        r'"Date"\s*:\s*"(\d{2}-\d{2}-\d{4})"',  # Matches "dd-mm-yyyy"
-        r'"Date"\s*:\s*"(\d{4}-\d{2}-\d{2})"',  # Matches "yyyy-mm-dd"
-        r'"Date"\s*:\s*"(\d{2}/\d{2}/\d{4})"',  # Matches "dd/mm/yyyy"
-        r'"Date"\s*:\s*"(\d{2}/\d{2}/\d{2})"',  # Matches "mm/dd/yy"
-        r'"Date"\s*:\s*"(\d{2}-\d{2}-\d{2})"',  # Matches "mm-dd-yy"
-    ]
-    
-    # Search for the first matching date pattern in the content
-    for pattern in date_patterns:
-        match = re.search(pattern, content)
-        if match:
-            date_str = match.group(1)
-            
-            # Standardize the date format to YYYY-MM-DD
-            if '/' in date_str:
-                date_str = date_str.replace('/', '-')
-            
-            date_parts = date_str.split('-')
-            
-            if len(date_parts[0]) == 4:
-                # Date is already in yyyy-mm-dd format
-                standardized_date = date_str
-            elif len(date_parts[2]) == 2:
-                # Convert yy to yyyy (assuming 20yy)
-                date_parts[2] = '20' + date_parts[2]
-                standardized_date = f"{date_parts[2]}-{date_parts[0]}-{date_parts[1]}"
-            else:
-                # Convert dd-mm-yyyy to yyyy-mm-dd
-                standardized_date = f"{date_parts[2]}-{date_parts[0]}-{date_parts[1]}"
-                
-            return standardized_date
-    
-    return None  # Return None if no date is found
+# Initialize AWS S3 client
+s3_client = boto3.client('s3')
 
-def clean_and_extract_json(content):
+def is_valid_json_value(value):
     """
-    Remove non-JSON text from the content and attempt to extract valid JSON.
+    Check if a value can be serialized to JSON.
     """
-    # Find the first '{' and last '}' to extract JSON content
-    start_index = content.find('{')
-    end_index = content.rfind('}')
-    if start_index == -1 or end_index == -1 or start_index >= end_index:
-        return None  # Return None if valid JSON delimiters are not found
-    json_str = content[start_index:end_index+1]
-
-    # Attempt to parse the extracted string as JSON
     try:
-        parsed_json = json.loads(json_str)
-        return parsed_json
-    except json.JSONDecodeError as e:
-        # Attempt to clean the string by removing control characters and retry parsing
-        json_str_cleaned = re.sub(r'[\x00-\x1F\x7F]', '', json_str)
-        try:
-            parsed_json = json.loads(json_str_cleaned)
-            return parsed_json
-        except json.JSONDecodeError:
-            return None  # Return None if parsing fails after attempts
-
-def process_files(input_directory):
-    """
-    Process files from the input directory and organize contents by date.
-    """
-    contents_by_date = defaultdict(list)
-    all_files = []
-
-    # Collect all .txt files from the input directory
-    for root, _, files in os.walk(input_directory):
-        for file in files:
-            if file.endswith('.txt'):
-                all_files.append(os.path.join(root, file))
-
-    if not all_files:
-        logger.warning(f"No '.txt' files found in {input_directory}")
-        return None
-
-    logger.info(f"Total '.txt' files found: {len(all_files)}")
-
-    # Process each collected file
-    for file_path in all_files:
-        logger.info(f"Processing file: {file_path}")
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            date = extract_first_date_from_content(content)
-            if not date:
-                logger.warning(f"No date found in {file_path}")
-                continue
-            # Clean content and extract JSON
-            parsed_json = clean_and_extract_json(content)
-            if parsed_json is not None:
-                contents_by_date[date].append(parsed_json)
-            else:
-                logger.error(f"Failed to parse JSON from file: {file_path}")
-        except Exception as e:
-            logger.error(f"Error processing file {file_path}: {str(e)}")
-
-    return contents_by_date
-
-def add_missing_references(data, page_number_str, path_to_filename):
-    """
-    Recursively add or overwrite 'References' dictionaries within 'KeyWordsOrFindings'.
-    """
-    if isinstance(data, dict):
-        if "ProceduresOrFindings" in data:
-            for finding in data["ProceduresOrFindings"]:
-                if "KeyWordsOrFindings" in finding:
-                    for keyword in finding["KeyWordsOrFindings"]:
-                        for key, value in keyword.items():
-                            if isinstance(value, dict):
-                                # Overwrite the specified keys in the References dictionary
-                                value["References"] = {
-                                    "ThisIsPageNumberOfPDF": page_number_str,
-                                    "BillingOrRecordDocument": "Record",
-                                    "PathToFilename": path_to_filename
-                                }
-                                logger.debug(f"Updated References in KeyWordsOrFindings: {key}")
-                            else:
-                                logger.warning(f"Skipping non-dict entry for KeyWordsOrFindings: {key} in file.")
-        # Continue traversing the rest of the JSON structure
-        for key, value in data.items():
-            if isinstance(value, dict) or isinstance(value, list):
-                add_missing_references(value, page_number_str, path_to_filename)
-    elif isinstance(data, list):
-        for item in data:
-            add_missing_references(item, page_number_str, path_to_filename)
+        json.dumps(value)
+        return True
+    except (TypeError, OverflowError):
+        return False
 
 def merge_json_complex(data_list):
     """
@@ -206,64 +91,176 @@ def merge_json_complex(data_list):
     
     return result
 
+def get_pdf_files(bucket_name, prefix):
+    """
+    Retrieve a list of PDF files from an S3 bucket with a given prefix.
+    """
+    pdf_files = []
+    continuation_token = None
+
+    while True:
+        try:
+            if continuation_token:
+                response = s3_client.list_objects_v2(
+                    Bucket=bucket_name, 
+                    Prefix=prefix,
+                    ContinuationToken=continuation_token
+                )
+            else:
+                response = s3_client.list_objects_v2(
+                    Bucket=bucket_name, 
+                    Prefix=prefix
+                )
+        except ClientError as e:
+            logger.error(f"Error listing objects in bucket {bucket_name}: {str(e)}")
+            return pdf_files
+
+        if 'Contents' in response:
+            pdf_files.extend([obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.pdf')])
+
+        if 'NextContinuationToken' in response:
+            continuation_token = response['NextContinuationToken']
+        else:
+            break
+
+    return pdf_files
+
+def get_files_by_date(bucket_name, prefix):
+    """
+    Retrieve JSON files from an S3 bucket and organize them by date extracted from filenames.
+    """
+    files_by_date = {}
+    continuation_token = None
+
+    while True:
+        try:
+            if continuation_token:
+                response = s3_client.list_objects_v2(
+                    Bucket=bucket_name, 
+                    Prefix=prefix,
+                    ContinuationToken=continuation_token
+                )
+            else:
+                response = s3_client.list_objects_v2(
+                    Bucket=bucket_name, 
+                    Prefix=prefix
+                )
+        except ClientError as e:
+            logger.error(f"Error listing objects in bucket {bucket_name}: {str(e)}")
+            return files_by_date
+
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                if obj['Key'].endswith('.json'):
+                    date = extract_date_from_filename(obj['Key'])
+                    if date:
+                        if date not in files_by_date:
+                            files_by_date[date] = []
+                        files_by_date[date].append(obj['Key'])
+
+        if 'NextContinuationToken' in response:
+            continuation_token = response['NextContinuationToken']
+        else:
+            break
+
+    return files_by_date
+
+def extract_date_from_filename(filename):
+    """
+    Extract a date from a filename using regex patterns.
+    """
+    match = re.search(r'records_(\d{4}-\d{2}-\d{2})\.json', filename)
+    if not match:
+        match = re.search(r'bills_(\d{4}-\d{2}-\d{2})\.json', filename)
+    if not match:
+        match = re.search(r'(\d{4}-\d{2}-\d{2})\.json', filename)
+    if match:
+        return match.group(1)
+    else:
+        logger.warning(f"Could not extract date from filename: {filename}")
+        return None
+    
+def read_json_from_s3(bucket_name, key):
+    """
+    Read and parse a JSON file from an S3 bucket.
+    """
+    try:
+        response = s3_client.get_object(Bucket=bucket_name, Key=key)
+        return json.loads(response['Body'].read().decode('utf-8'))
+    except ClientError as e:
+        logger.error(f"Error reading JSON from S3: {str(e)}")
+        return []
+
+def create_status_file(bucket_name, user_id, case_id):
+    """
+    Create a status.json file in an S3 bucket to indicate processing completion.
+    """
+    status_key = f"{user_id}/{case_id}/status.json"
+    status_content = json.dumps({"status": "COMPLETED"})
+    try:
+        s3_client.put_object(Bucket=bucket_name, Key=status_key, Body=status_content)
+        logger.info(f"Created status.json file: {status_key}")
+    except ClientError as e:
+        logger.error(f"Error creating status.json file: {str(e)}")
+
+def process_and_merge_files(input_directory, output_directory):
+    """
+    Process and merge JSON files from the input directory, saving results to the output directory.
+    """
+    all_files_by_date = {}
+    
+    # Walk through the input directory to find .txt files
+    for root, _, files in os.walk(input_directory):
+        for file in files:
+            if file.endswith('.json'):
+                file_path = os.path.join(root, file)
+                date = extract_date_from_filename(file)
+                if date:
+                    if date not in all_files_by_date:
+                        all_files_by_date[date] = []
+                    all_files_by_date[date].append(file_path)
+
+    # Process the JSON files and merge them by date
+    for date, files in all_files_by_date.items():
+        all_data = []
+        for file in files:
+            with open(file, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    all_data.extend(data)
+                else:
+                    all_data.append(data)
+
+        merged_data = merge_json_complex(all_data)
+
+        if merged_data:
+            output_file = os.path.join(output_directory, f"{date}.json")
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            with open(output_file, 'w') as f:
+                json.dump(merged_data, f, indent=2)
+            logger.info(f"Merged and saved file for date {date}: {output_file}")
+
+    return len(all_files_by_date) > 0
+
 def main(input_directory):
     """
     Main function to process files from the input directory and save merged results.
     """
-    # Define the output directory for combined files
-    output_directory = os.path.join(input_directory, 'combine')
-    os.makedirs(output_directory, exist_ok=True)
+    output_directory = os.path.join(os.path.dirname(input_directory), 'complete')
 
-    logger.info(f"Processing files in: {input_directory}")
+    logger.info(f"Processing files from directory: {input_directory}")
 
-    # Process files and organize contents by date
-    contents_by_date = process_files(input_directory)
+    files_processed = process_and_merge_files(input_directory, output_directory)
 
-    if not contents_by_date:
-        logger.warning("No contents to process after parsing files.")
-        return
-
-    # Output a JSON file for each date using the extracted date as the file name
-    for date, records in contents_by_date.items():
-        # Directly use the extracted date as the file name
-        output_file = os.path.join(output_directory, f"{date}.json")
-        
-        try:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(records, f, indent=2)
-            logger.info(f"Saved combined records to {output_file}")
-        except Exception as e:
-            logger.error(f"Error writing combined records to {output_file}: {str(e)}")
-            continue
-
-        # Add or overwrite References in each record
-        for record in records:
-            if "Reference" in record:
-                page_number_str = str(record["Reference"])
-                path_to_filename = f"page_{page_number_str}.txt"
-                add_missing_references(record, page_number_str, path_to_filename)
-
-    # Prepare input for the next step (e.g., 3details.py)
-    next_step_input = json.dumps({
-        'file_path': output_directory,
-    })
-    
-    # Trigger the next step
-    logger.info("Triggering 3details.py")
-    try:
-        subprocess.run(['python', '3details.py', next_step_input], check=True)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Error executing 3details.py: {e}")
-        sys.exit(1)
-
-    logger.info("Processing completed successfully")
+    if files_processed:
+        logger.info("Processing completed successfully")
+    else:
+        logger.warning(f"No files were processed from the input directory: {input_directory}")
 
 if __name__ == "__main__":
-    # Ensure the script is run with the correct number of arguments
     if len(sys.argv) != 2:
-        logger.error("Usage: python run_me_to_combine.py <input_directory>")
+        logger.error("Usage: python full-json-test.py <input_directory>")
         sys.exit(1)
     
-    # Get the input directory from command-line arguments
     input_directory = sys.argv[1]
     main(input_directory)
