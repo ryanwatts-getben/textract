@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from jinja2 import Environment, FileSystemLoader
 from datetime import datetime
 
@@ -19,6 +20,26 @@ def parse_date(date_string):
         except ValueError:
             continue
     return 'Unknown_Date'
+
+def process_page_numbers(references):
+    if isinstance(references, dict) and 'ThisIsPageNumberOfPDF' in references:
+        page_numbers = references['ThisIsPageNumberOfPDF']
+        if isinstance(page_numbers, str):
+            page_numbers = [page_numbers]
+        elif isinstance(page_numbers, int):
+            page_numbers = [str(page_numbers)]
+        else:
+            page_numbers = [str(num) for num in page_numbers]
+        references['ThisIsPageNumberOfPDF'] = page_numbers
+    return references
+
+def process_codes(codes):
+    for category in codes.values():
+        for item in category:
+            for code_info in item.values():
+                if 'References' in code_info:
+                    code_info['References'] = process_page_numbers(code_info['References'])
+    return codes
 
 def process_lab_results(data):
     if isinstance(data, dict):
@@ -48,7 +69,8 @@ def main():
     # Define paths
     current_dir = os.path.dirname(os.path.abspath(__file__))
     json_dir = os.path.join(current_dir, '..', 'htmlcomplete')
-    template_dir = os.path.join(current_dir, '..', 'htmlcomplete', 'templates')
+    template_dir = os.path.join(json_dir, 'templates')
+    styles_dir = os.path.join(json_dir, 'templates')
     output_dir = os.path.join(json_dir, 'output')
 
     # Set up Jinja2 environment
@@ -69,7 +91,7 @@ def main():
                 # Extract necessary data from JSON
                 date = parse_date(data.get('Date', 'Unknown Date'))
                 patient_info = data.get('PatientInformation', {})
-                codes = data.get('Codes', {})
+                codes = process_codes(data.get('Codes', {}))
                 procedures_or_findings = data.get('ProceduresOrFindings', [])
                 daily_financial_summary = data.get('DailyFinancialSummary', [])
                 other_information = data.get('OtherInformation', [])
