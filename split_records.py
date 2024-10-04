@@ -8,10 +8,10 @@ import sys
 import subprocess
 from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from anthropic import Anthropic, AnthropicError, RateLimitError, APIError
+from anthropic import Anthropic, APIError
 import time
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', force=True)
 logger = logging.getLogger(__name__)
 
 s3_client = boto3.client('s3')
@@ -324,8 +324,6 @@ def main(input_json, retry_count=0):
         total_pages = get_pdf_page_count(bucket_name, pdf_key)
         logger.info(f"Total pages in PDF: {total_pages}")
 
-        process_pdf(bucket_name, pdf_key, output_prefix)
-        
         split_prefix = f"{output_prefix}/split/"
         clean_prefix = f"{output_prefix}/clean/"
         
@@ -336,8 +334,7 @@ def main(input_json, retry_count=0):
         logger.info(f"Files in clean directory: {clean_file_count}")
 
         if split_file_count == clean_file_count == total_pages:
-            logger.info("All pages processed successfully. Triggering clean.py")
-            
+            logger.info("All pages already processed. Triggering after_clean.py")
             clean_path = f"{output_prefix}/clean"
             
             clean_input = json.dumps({
@@ -348,19 +345,45 @@ def main(input_json, retry_count=0):
                 'user_id': user_id,
             })
             
-            logger.info("Triggering 2cleanup.py")
-            subprocess.run(['python', '2cleanup.py', clean_input], check=True)
-            logger.info("clean.py completed successfully")
+            logger.info("Triggering after_clean.py")
+            subprocess.run(['python', 'after_clean.py', clean_input], check=True)
+            logger.info("after_clean.py completed successfully")
         else:
-            logger.warning("Not all pages were processed.")
-            logger.warning(f"Expected {total_pages} pages, found {split_file_count} in split and {clean_file_count} in clean")
+            logger.info("Processing PDF pages")
+            process_pdf(bucket_name, pdf_key, output_prefix)
             
-            if retry_count < 3:
-                logger.info(f"Retrying process (Attempt {retry_count + 2})")
-                main(input_json, retry_count + 1)
+            # Recount files after processing
+            split_file_count = count_files_in_s3_prefix(bucket_name, split_prefix)
+            clean_file_count = count_files_in_s3_prefix(bucket_name, clean_prefix)
+            
+            logger.info(f"Files in split directory after processing: {split_file_count}")
+            logger.info(f"Files in clean directory after processing: {clean_file_count}")
+
+            if split_file_count == clean_file_count == total_pages:
+                logger.info("All pages processed successfully. Triggering after_clean.py")
+                clean_path = f"{output_prefix}/clean"
+                
+                clean_input = json.dumps({
+                    'file_name': file_name,
+                    'file_path': clean_path,
+                    'bucket': bucket_name,
+                    'case_id': case_id,
+                    'user_id': user_id,
+                })
+                
+                logger.info("Triggering after_clean.py")
+                subprocess.run(['python', 'after_clean.py', clean_input], check=True)
+                logger.info("after_clean.py completed successfully")
             else:
-                logger.error("Max retry attempts reached. Process failed.")
-                raise Exception("Failed to process all pages after multiple attempts")
+                logger.warning("Not all pages were processed.")
+                logger.warning(f"Expected {total_pages} pages, found {split_file_count} in split and {clean_file_count} in clean")
+                
+                if retry_count < 3:
+                    logger.info(f"Retrying process (Attempt {retry_count + 2})")
+                    main(input_json, retry_count + 1)
+                else:
+                    logger.error("Max retry attempts reached. Process failed.")
+                    raise Exception("Failed to process all pages after multiple attempts")
 
         logger.info("PDF processing completed")
     except json.JSONDecodeError as e:
@@ -369,10 +392,10 @@ def main(input_json, retry_count=0):
     except Exception as e:
         logger.error(f"An error occurred while processing the PDF: {str(e)}")
         raise
-
+    
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        logger.error("Usage: python 1split.py '<json_input>'")
+        logger.error("Usage: python split_records.py '<json_input>'")
         sys.exit(1)
     
     json_input = sys.argv[1]

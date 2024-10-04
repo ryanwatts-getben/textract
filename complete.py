@@ -7,15 +7,22 @@ from datetime import datetime
 from botocore.exceptions import ClientError
 from copy import deepcopy
 import sys
+import subprocess
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', force=True)
 logger = logging.getLogger(__name__)
 
-# Initialize AWS client
+# Initialize AWS S3 client
 s3_client = boto3.client('s3')
+s3_paginator = s3_client.get_paginator('list_objects_v2')
 
 def is_valid_json_value(value):
+    """
+    Check if a value can be serialized to JSON.
+    """
     try:
         json.dumps(value)
         return True
@@ -23,16 +30,21 @@ def is_valid_json_value(value):
         return False
 
 def merge_json_complex(data_list):
+    """
+    Merge a list of JSON objects, handling nested structures and duplicates.
+    """
     def merge_two(data1, data2):
+        # Merge two JSON objects
         if isinstance(data1, dict) and isinstance(data2, dict):
             result = deepcopy(data1)
             for key, value in data2.items():
                 if key in result:
+                    # Handle merging of simple types
                     if isinstance(result[key], (str, int, float)) and isinstance(value, (str, int, float)):
                         if result[key] != value and key != "name":
                             result[key] = [str(result[key]), str(value)]
+                    # Handle merging of lists
                     elif isinstance(result[key], list) and isinstance(value, list):
-                        # Merge lists with possible dicts without using set
                         merged_list = []
                         seen = set()
                         for item in result[key] + value:
@@ -53,6 +65,7 @@ def merge_json_complex(data_list):
                     result[key] = deepcopy(value)
             return result
         elif isinstance(data1, list) and isinstance(data2, list):
+            # Merge lists with unique items
             merged_list = []
             seen = set()
             for item in data1 + data2:
@@ -79,59 +92,34 @@ def merge_json_complex(data_list):
     return result
 
 def get_pdf_files(bucket_name, prefix):
+    """
+    Retrieve a list of PDF files from an S3 bucket with a given prefix,
+    excluding files in subdirectories.
+    """
     pdf_files = []
-    continuation_token = None
-
-    while True:
-        try:
-            if continuation_token:
-                response = s3_client.list_objects_v2(
-                    Bucket=bucket_name, 
-                    Prefix=prefix,
-                    ContinuationToken=continuation_token
-                )
-            else:
-                response = s3_client.list_objects_v2(
-                    Bucket=bucket_name, 
-                    Prefix=prefix
-                )
-        except ClientError as e:
-            logger.error(f"Error listing objects in bucket {bucket_name}: {str(e)}")
-            return pdf_files
-
-        if 'Contents' in response:
-            pdf_files.extend([obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.pdf')])
-
-        if 'NextContinuationToken' in response:
-            continuation_token = response['NextContinuationToken']
-        else:
-            break
+    paginator = s3_paginator.paginate(Bucket=bucket_name, Prefix=prefix)
+    
+    for page in paginator:
+        if 'Contents' in page:
+            for obj in page['Contents']:
+                if obj['Key'].endswith('.pdf'):
+                    # Check if the file is directly in the prefix directory
+                    relative_path = obj['Key'][len(prefix):]
+                    if '/' not in relative_path:
+                        pdf_files.append(obj['Key'])
 
     return pdf_files
 
 def get_files_by_date(bucket_name, prefix):
+    """
+    Retrieve JSON files from an S3 bucket and organize them by date extracted from filenames.
+    """
     files_by_date = {}
-    continuation_token = None
-
-    while True:
-        try:
-            if continuation_token:
-                response = s3_client.list_objects_v2(
-                    Bucket=bucket_name, 
-                    Prefix=prefix,
-                    ContinuationToken=continuation_token
-                )
-            else:
-                response = s3_client.list_objects_v2(
-                    Bucket=bucket_name, 
-                    Prefix=prefix
-                )
-        except ClientError as e:
-            logger.error(f"Error listing objects in bucket {bucket_name}: {str(e)}")
-            return files_by_date
-
-        if 'Contents' in response:
-            for obj in response['Contents']:
+    paginator = s3_paginator.paginate(Bucket=bucket_name, Prefix=prefix)
+    
+    for page in paginator:
+        if 'Contents' in page:
+            for obj in page['Contents']:
                 if obj['Key'].endswith('.json'):
                     date = extract_date_from_filename(obj['Key'])
                     if date:
@@ -139,17 +127,13 @@ def get_files_by_date(bucket_name, prefix):
                             files_by_date[date] = []
                         files_by_date[date].append(obj['Key'])
 
-        if 'NextContinuationToken' in response:
-            continuation_token = response['NextContinuationToken']
-        else:
-            break
-
     return files_by_date
 
 def extract_date_from_filename(filename):
-    match = re.search(r'records_(\d{4}-\d{2}-\d{2})\.json', filename)
-    if not match:
-        match = re.search(r'(\d{4}-\d{2}-\d{2})\.json', filename)
+    """
+    Extract a date from a filename using regex patterns.
+    """
+    match = re.search(r'(\d{4}-\d{2}-\d{2})\.json', filename)
     if match:
         return match.group(1)
     else:
@@ -157,6 +141,9 @@ def extract_date_from_filename(filename):
         return None
     
 def read_json_from_s3(bucket_name, key):
+    """
+    Read and parse a JSON file from an S3 bucket.
+    """
     try:
         response = s3_client.get_object(Bucket=bucket_name, Key=key)
         return json.loads(response['Body'].read().decode('utf-8'))
@@ -165,6 +152,9 @@ def read_json_from_s3(bucket_name, key):
         return []
 
 def create_status_file(bucket_name, user_id, case_id):
+    """
+    Create a status.json file in an S3 bucket to indicate processing completion.
+    """
     status_key = f"{user_id}/{case_id}/status.json"
     status_content = json.dumps({"status": "COMPLETED"})
     try:
@@ -173,46 +163,53 @@ def create_status_file(bucket_name, user_id, case_id):
     except ClientError as e:
         logger.error(f"Error creating status.json file: {str(e)}")
 
+def check_combine_folder(bucket_name, prefix):
+    """
+    Check if the /combine/ folder exists and contains files.
+    """
+    paginator = s3_paginator.paginate(Bucket=bucket_name, Prefix=prefix)
+    
+    for page in paginator:
+        if 'Contents' in page and len(page['Contents']) > 0:
+            return True
+    
+    return False
+
 def process_and_merge_files(bucket_name, user_id, case_id, output_prefix):
+    """
+    Process and merge JSON files from S3, saving results to the output prefix.
+    """
     records_pdf_files = get_pdf_files(bucket_name, f"{user_id}/{case_id}/records/")
     bills_pdf_files = get_pdf_files(bucket_name, f"{user_id}/{case_id}/bills/")
     
-    # Combine all PDF files from records and bills
     all_pdf_files = records_pdf_files + bills_pdf_files
-    
+
     # Pre-check for /combine/ folders for all PDF files
     for pdf_file in all_pdf_files:
-        file_name = os.path.basename(pdf_file).split('.')[0]  # Extract base name from PDF file
+        file_name = os.path.basename(pdf_file).split('.')[0]
         folder_type = 'records' if '/records/' in pdf_file else 'bills'
         combine_prefix = f"{user_id}/{case_id}/{folder_type}/{file_name}/combine/"
-        
-        # Check if the combine folder exists by trying to list its contents
-        try:
-            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=combine_prefix)
-            if 'Contents' not in response or len(response['Contents']) == 0:
-                # No files found in the combine folder
-                logger.error(f"Missing /combine/ folder or no files for {pdf_file}. Aborting the process.")
-                return False  # Stop processing as a combine folder is missing or empty
-        except ClientError as e:
-            logger.error(f"Error checking combine folder for {pdf_file}: {str(e)}")
-            return False  # Stop processing if an error occurs
+        if not check_combine_folder(bucket_name, combine_prefix):
+            logger.error(f"Missing /combine/ folder or no files for {pdf_file}. Aborting the process.")
+            return False
 
-    # If we pass the pre-check, proceed with the file processing
     all_files_by_date = {}
+
+
     
     for pdf_file in all_pdf_files:
         file_name = os.path.basename(pdf_file).split('.')[0]
         folder_type = 'records' if '/records/' in pdf_file else 'bills'
         combine_prefix = f"{user_id}/{case_id}/{folder_type}/{file_name}/combine/"
+
+
         files_by_date = get_files_by_date(bucket_name, combine_prefix)
         
-        # Collect all files by date
+
         for date, files in files_by_date.items():
             if date not in all_files_by_date:
                 all_files_by_date[date] = []
             all_files_by_date[date].extend(files)
-
-    # Process the JSON files and merge them
     for date, files in all_files_by_date.items():
         all_data = []
         for file in files:
@@ -224,37 +221,9 @@ def process_and_merge_files(bucket_name, user_id, case_id, output_prefix):
 
         merged_data = merge_json_complex(all_data)
 
-        # Update PageNumber in References for ICD10CM, Rx, CPT, and other elements
-        if 'Codes' in merged_data:
-            for code_type in ['ICD10CM', 'Rx', 'CPTCodes']:
-                if code_type in merged_data['Codes']:
-                    for item in merged_data['Codes'][code_type]:
-                        if isinstance(item, dict):
-                            for code, details in item.items():
-                                if isinstance(details, dict) and 'References' in details:
-                                    if isinstance(details['References'], dict) and 'ThisIsPageNumberOfPDF' in details['References']:
-                                        details['References']['PageNumber'] = details['References'].pop('ThisIsPageNumberOfPDF')
-
-        # Update PageNumber in References for ProceduresOrFindings
-        if 'ProceduresOrFindings' in merged_data:
-            for item in merged_data['ProceduresOrFindings']:
-                if isinstance(item, dict) and 'KeyWordsOrFindings' in item:
-                    for finding in item['KeyWordsOrFindings']:
-                        if isinstance(finding, dict):
-                            for _, details in finding.items():
-                                if isinstance(details, dict) and 'References' in details:
-                                    if isinstance(details['References'], dict) and 'ThisIsPageNumberOfPDF' in details['References']:
-                                        details['References']['PageNumber'] = details['References'].pop('ThisIsPageNumberOfPDF')
-
-        # Update PageNumber in References for OtherInformation
-        if 'OtherInformation' in merged_data:
-            for item in merged_data['OtherInformation']:
-                if isinstance(item, dict) and 'References' in item:
-                    if isinstance(item['References'], dict) and 'ThisIsPageNumberOfPDF' in item['References']:
-                        item['References']['PageNumber'] = item['References'].pop('ThisIsPageNumberOfPDF')
-
         if merged_data:
             output_key = f"{output_prefix}{date}.json"
+
             try:
                 s3_client.put_object(Bucket=bucket_name, Key=output_key, Body=json.dumps(merged_data, indent=2))
                 logger.info(f"Merged and saved file for date {date}: {output_key}")
@@ -262,6 +231,7 @@ def process_and_merge_files(bucket_name, user_id, case_id, output_prefix):
                 logger.error(f"Error saving merged file for date {date}: {str(e)}")
 
     return len(all_files_by_date) > 0
+
 def main(input_json):
     try:
         data = json.loads(input_json)
@@ -269,7 +239,7 @@ def main(input_json):
         user_id = data['user_id']
         case_id = data['case_id']
 
-        output_prefix = f"{user_id}/{case_id}/final/"
+        output_prefix = f"{user_id}/{case_id}/complete/"
 
         logger.info(f"Processing files for user_id: {user_id}, case_id: {case_id}")
 
@@ -278,17 +248,36 @@ def main(input_json):
         if files_processed:
             create_status_file(bucket_name, user_id, case_id)
             logger.info("Processing completed successfully")
+
+            # Prepare input for generate_html.py
+            html_input = json.dumps({
+                'bucket': bucket_name,
+                'user_id': user_id,
+                'case_id': case_id,
+                'input_prefix': output_prefix,
+                'output_prefix': f"{user_id}/{case_id}/html/"
+            })
+
+            # Call generate_html.py as a subprocess
+            try:
+                result = subprocess.run(['python', 'generate_html.py', html_input],check=True)
+                logger.info(f"generate_html.py completed successfully. Output: {result.stdout}")
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Error running generate_html.py: {e}")
+                logger.error(f"generate_html.py error output: {e.stderr}")
         else:
             logger.warning(f"No files were processed for user_id: {user_id}, case_id: {case_id}")
 
     except json.JSONDecodeError as e:
         logger.error(f"Error decoding JSON input: {str(e)}")
+        sys.exit(1)
     except Exception as e:
         logger.error(f"An error occurred while processing the records: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        logger.error("Usage: python 3details.py '<json_input>'")
+        logger.error("Usage: python complete.py '<json_input>'")
         sys.exit(1)
     
     json_input = sys.argv[1]

@@ -2,3 +2,8 @@ boto3
 PyMuPDF
 anthropic
 botocore
+Flask
+python-dotenv
+fuzzywuzzy
+jinja2
+python-dateutil

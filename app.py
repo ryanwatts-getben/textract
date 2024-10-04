@@ -2,11 +2,13 @@ import json
 import logging
 import os
 import subprocess
-import sys
+from flask import Flask, request, jsonify
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', force=True)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
 
 def process_file(bucket_name, file_path, script_name):
     user_id, case_id = file_path.split('/')[:2]
@@ -20,27 +22,22 @@ def process_file(bucket_name, file_path, script_name):
         'user_id': user_id,
     }
     logger.info(f"Processing: {message_body}")
-    
     # Construct the command to run the appropriate split script
     command = [
-        sys.executable,  # Use the current Python interpreter
-        script_name,
+        "python", script_name,
         json.dumps(message_body)
     ]
-    
-    logger.info(f"Executing command: {' '.join(command)}")
-    
     try:
-        result = subprocess.run(command, check=True)
-        logger.info(f"Successfully processed {file_path} by calling {script_name}")
-        logger.info(f"Output: {result.stdout}")
+        subprocess.run(command, check=True)
+        logger.info(f"Successfully processed {file_path}")
     except subprocess.CalledProcessError as e:
         logger.error(f"Error processing {file_path}: {e}")
-        logger.error(f"Error output: {e.stderr}")
+        raise
 
-def main(json_input):
+@app.route('/process', methods=['POST'])
+def process():
     try:
-        data = json.loads(json_input)
+        data = request.json
         bucket_name = data['bucket']
         records = data.get('records', [])
         bills = data.get('bills', [])
@@ -50,22 +47,14 @@ def main(json_input):
         
         for record in records:
             process_file(bucket_name, record['file_path'], 'split_records.py')
-        
         for bill in bills:
             process_file(bucket_name, bill['file_path'], 'split_bills.py')
         
         logger.info(f"Successfully processed {total_records} records and {total_bills} bills")
-    except json.JSONDecodeError as e:
-        logger.error(f"Error decoding JSON input: {str(e)}")
-        sys.exit(1)
+        return jsonify({"status": "success", "message": f"Successfully processed {total_records} records and {total_bills} bills"}), 200
     except Exception as e:
         logger.error(f"Error occurred while processing records and bills: {str(e)}")
-        sys.exit(1)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python execute.py '<json_input>'")
-        sys.exit(1)
-    
-    json_input = sys.argv[1]
-    main(json_input)
+    app.run(host='0.0.0.0', port=5001, debug=True)
