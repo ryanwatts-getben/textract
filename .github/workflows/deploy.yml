@@ -71,13 +71,17 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            cd /var/www/${{secrets.APP_NAME}}
-            sudo apt-get install -y python3-venv
-            # Install pm2 globally
-            sudo npm install -g pm2
-
             # Navigate to application directory
             cd /var/www/${{ secrets.APP_NAME }}
+
+            # Update package lists
+            sudo apt-get update
+
+            # Install necessary packages
+            sudo apt-get install -y python3-venv nodejs npm
+
+            # Install pm2 globally
+            sudo npm install -g pm2
 
             # Create virtual environment
             python3 -m venv venv
