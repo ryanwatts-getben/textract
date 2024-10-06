@@ -8,7 +8,7 @@ env:
   PORT: ${{ secrets.PORT }}
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_REGION: ${{ env.AWS_REGION }}
   AWS_BUCKET_NAME: ${{ secrets.AWS_BUCKET_NAME }}
   TEMPLATE_FILE_NAME: ${{ secrets.TEMPLATE_FILE_NAME }}
   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
