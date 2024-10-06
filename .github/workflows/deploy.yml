@@ -36,7 +36,7 @@ jobs:
           echo "PORT=${{ secrets.PORT }}"  >> .env
           echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}"  >> .env
           echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}"  >> .env
-          echo "AWS_REGION=${{ secrets.AWS_REGION }}"  >> .env
+          echo "AWS_REGION=${{ env.AWS_REGION }}"  >> .env
           echo "TEMPLATE_FILE_NAME=${{ secrets.TEMPLATE_FILE_NAME }}"  >> .env
           echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
           echo "AWS_TEXTRACT_BUCKET_NAME=${{ secrets.AWS_TEXTRACT_BUCKET_NAME }}" >> .env
