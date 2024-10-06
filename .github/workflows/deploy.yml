@@ -8,7 +8,7 @@ env:
   PORT: ${{ secrets.PORT }}
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  AWS_REGION: "us-east-1"
+  AWS_REGION: ${{ secrets.AWS_REGION }}
   AWS_BUCKET_NAME: ${{ secrets.AWS_BUCKET_NAME }}
   TEMPLATE_FILE_NAME: ${{ secrets.TEMPLATE_FILE_NAME }}
   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -24,7 +24,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.x"
+          python-version: "3.9"
       - name: Install AWS CLI
         uses: aws-actions/configure-aws-credentials@v1
         with:
@@ -36,7 +36,7 @@ jobs:
           echo "PORT=${{ secrets.PORT }}"  >> .env
           echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}"  >> .env
           echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}"  >> .env
-          echo "AWS_REGION=us-east-1"  >> .env
+          echo "AWS_REGION=$${{secrets.AWS_REGION }}"  >> .env
           echo "TEMPLATE_FILE_NAME=${{ secrets.TEMPLATE_FILE_NAME }}"  >> .env
           echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
           echo "AWS_TEXTRACT_BUCKET_NAME=${{ secrets.AWS_TEXTRACT_BUCKET_NAME }}" >> .env
