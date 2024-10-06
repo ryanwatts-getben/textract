@@ -95,7 +95,12 @@ jobs:
             # Install dependencies
             pip install -r requirements.txt
 
-            # Start application using pm2
-            pm2 delete ${{ secrets.APP_NAME }} || true
+            # Delete the existing process if it exists, suppressing the error message
+            pm2 delete --silent ${{ secrets.APP_NAME }} || true
+
+            # Start the application using PM2
             pm2 start "python app.py" --name ${{ secrets.APP_NAME }} -- --port ${{ secrets.PORT }}
+
+            # Save the PM2 process list to synchronize it
             pm2 save
+
