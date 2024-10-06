@@ -1,0 +1,79 @@
+name: Deploy Flask App to AWS EC2
+on:
+  push:
+    branches:
+      - main
+env:
+  APP_NAME: ${{ secrets.APP_NAME }}
+  PORT: ${{ secrets.PORT }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_BUCKET_NAME: ${{ secrets.AWS_BUCKET_NAME }}
+  TEMPLATE_FILE_NAME: ${{ secrets.TEMPLATE_FILE_NAME }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  AWS_TEXTRACT_BUCKET_NAME: ${{ secrets.AWS_TEXTRACT_BUCKET_NAME }}
+  PROMPT_BUCKET: ${{ secrets.PROMPT_BUCKET }}
+  TEMPLATE_FILE: ${{ secrets.TEMPLATE_FILE }}
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+      - name: Install AWS CLI
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Add .env
+        run: |
+          echo "PORT=${{ secrets.PORT }}"  >> .env
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}"  >> .env
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}"  >> .env
+          echo "AWS_REGION=${{ secrets.AWS_REGION }}"  >> .env
+          echo "TEMPLATE_FILE_NAME=${{ secrets.TEMPLATE_FILE_NAME }}"  >> .env
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+          echo "AWS_TEXTRACT_BUCKET_NAME=${{ secrets.AWS_TEXTRACT_BUCKET_NAME }}" >> .env
+          echo "PROMPT_BUCKET=${{ secrets.PROMPT_BUCKET }}" >> .env
+          echo "TEMPLATE_FILE=${{ secrets.TEMPLATE_FILE }}" >> .env
+          echo "APP_NAME=${{secrets.APP_NAME}}" >> .env
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Clean Target Directory on EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            rm -rf /var/www/${{secrets.APP_NAME}}/*
+      - name: Transfer Files to AWS EC2
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "./*, **/*"
+          target: "/var/www/${{secrets.APP_NAME}}"
+      - name: Restart Application on EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /var/www/${{secrets.APP_NAME}}
+            python3 -m venv venv
+            source venv/bin/activate
+            pip install -r requirements.txt
+            pm2 delete ${{secrets.APP_NAME}} || true
+            pm2 start "python app.py" --name ${{secrets.APP_NAME}} -- --port ${{ secrets.PORT }}
+            pm2 save
