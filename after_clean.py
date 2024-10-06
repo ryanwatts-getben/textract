@@ -338,11 +338,11 @@ def main(input_json, retry_count=0):
                 logger.warning("Not all files were processed.")
                 logger.warning(f"Expected {clean_file_count} files, found {after_clean_file_count} in after-clean")
                 
-                # if retry_count < 1:
-                #     logger.info(f"Retrying process (Attempt {retry_count + 2})")
-                #     return main(input_json, retry_count + 1)
-                # else:
-                #     logger.error("Max retry attempts reached. Process failed.")
+                if retry_count < 1:
+                    logger.info(f"Retrying process (Attempt {retry_count + 1})")
+                    return main(input_json, retry_count + 1)
+                else:
+                    logger.error("Max retry attempts reached. Process failed.")
 
         logger.info("All files processed successfully")
 
