@@ -73,9 +73,25 @@ jobs:
           script: |
             cd /var/www/${{secrets.APP_NAME}}
             sudo apt-get install -y python3-venv
+            # Install pm2 globally
+            sudo npm install -g pm2
+
+            # Navigate to application directory
+            cd /var/www/${{ secrets.APP_NAME }}
+
+            # Create virtual environment
             python3 -m venv venv
+
+            # Activate virtual environment
             source venv/bin/activate
+
+            # Upgrade pip
+            pip install --upgrade pip
+
+            # Install dependencies
             pip install -r requirements.txt
-            pm2 delete ${{secrets.APP_NAME}} || true
-            pm2 start "python app.py" --name ${{secrets.APP_NAME}} -- --port ${{ secrets.PORT }}
+
+            # Start application using pm2
+            pm2 delete ${{ secrets.APP_NAME }} || true
+            pm2 start "python app.py" --name ${{ secrets.APP_NAME }} -- --port ${{ secrets.PORT }}
             pm2 save
