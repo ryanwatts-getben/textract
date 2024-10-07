@@ -186,7 +186,8 @@ def process_and_merge_files(bucket_name, user_id, case_id, output_prefix):
 
     # Pre-check for /combine/ folders for all PDF files
     for pdf_file in all_pdf_files:
-        file_name = os.path.basename(pdf_file).split('.')[0]
+        file_name = '.'.join(os.path.basename(pdf_file).split('.')[:-1])
+        
         folder_type = 'records' if '/records/' in pdf_file else 'bills'
         combine_prefix = f"{user_id}/{case_id}/{folder_type}/{file_name}/combine/"
         if not check_combine_folder(bucket_name, combine_prefix):
@@ -198,7 +199,7 @@ def process_and_merge_files(bucket_name, user_id, case_id, output_prefix):
 
     
     for pdf_file in all_pdf_files:
-        file_name = os.path.basename(pdf_file).split('.')[0]
+        file_name = '.'.join(os.path.basename(pdf_file).split('.')[:-1])
         folder_type = 'records' if '/records/' in pdf_file else 'bills'
         combine_prefix = f"{user_id}/{case_id}/{folder_type}/{file_name}/combine/"
 
