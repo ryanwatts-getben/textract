@@ -6,10 +6,14 @@ import boto3
 import base64
 import sys
 import subprocess
+from dotenv import load_dotenv
 from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from anthropic import Anthropic, APIError
 import time
+
+# Load environment variables
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', force=True)
 logger = logging.getLogger(__name__)
@@ -21,21 +25,21 @@ anthropic_client = Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
 MAX_WORKERS = 10
 IMAGE_MEDIA_TYPE = "image/png"
 PROMPT_BUCKET = os.environ['PROMPT_BUCKET']
+RECORD_PROMPT_IMAGES = os.environ['RECORD_PROMPT_IMAGES']
+RECORD_PROMPT_FILES = os.environ['RECORD_PROMPT_FILES']
+
 
 def encode_files_for_payload():
     encoded_images = {}
     encoded_files = {}
     
-    # Encode images
-    for image_name in ['training_record_image1.png', 'training_record_image2.png']:
+    # Read image names from environment variable
+    image_names = RECORD_PROMPT_IMAGES.split(',')
+    for image_name in image_names:
         response = s3_client.get_object(Bucket=PROMPT_BUCKET, Key=f"records/step1/{image_name}")
         encoded_images[image_name] = base64.b64encode(response['Body'].read()).decode('utf-8')
     
-    # Read XML and JSON files
-    files_to_read = [
-        'training_prompt1.xml', 'training_prompt2.xml', 'system_prompt.xml',
-        'training_record_response1.json', 'training_record_response2.json'
-    ]
+    files_to_read = RECORD_PROMPT_FILES.split(',')
     for file_name in files_to_read:
         response = s3_client.get_object(Bucket=PROMPT_BUCKET, Key=f"records/step1/{file_name}")
         encoded_files[file_name] = response['Body'].read().decode('utf-8')

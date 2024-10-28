@@ -151,18 +151,62 @@ def read_json_from_s3(bucket_name, key):
         logger.error(f"Error reading JSON from S3: {str(e)}")
         return []
 
+def count_files_by_extension(bucket_name, prefix, extension):
+    count = 0
+    paginator = s3_client.get_paginator('list_objects_v2')
+    
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+        if 'Contents' in page:
+            for item in page['Contents']:
+                # Check if the file is directly in the prefix directory
+                if '/' not in item['Key'][len(prefix):] and item['Key'].lower().endswith(extension.lower()):
+                    count += 1
+    
+    return count
+
 def create_status_file(bucket_name, user_id, case_id):
     """
     Create a status.json file in an S3 bucket to indicate processing completion.
+    If reports directory exists, verifies that all PDFs have corresponding JSON files.
     """
-    status_key = f"{user_id}/{case_id}/status.json"
-    status_content = json.dumps({"status": "COMPLETED"})
     try:
+        reports_prefix = f"{user_id}/{case_id}/reports/"
+        
+        try:
+            # Check if reports directory exists
+            pdf_count = count_files_by_extension(bucket_name, reports_prefix, '.pdf')
+            if pdf_count > 0:
+                # If we have PDFs, check JSON count
+                json_count = count_files_by_extension(bucket_name, reports_prefix, '.json')
+                logger.info(f"Found {pdf_count} PDFs and {json_count} JSONs in reports directory")
+                
+                if pdf_count != json_count:
+                    raise Exception(
+                        f"Mismatch in file counts. PDFs: {pdf_count}, JSONs: {json_count}. "
+                        f"All PDFs must have corresponding JSON files before completing."
+                    )
+            else:
+                logger.info(f"No PDFs found in reports directory: {reports_prefix}. Proceeding with status creation.")
+                
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchBucket':
+                raise
+            logger.info(f"Reports directory not found or empty: {reports_prefix}. Proceeding with status creation.")
+        
+        # Create status file
+        status_key = f"{user_id}/{case_id}/status.json"
+        status_content = json.dumps({"status": "COMPLETED"})
         s3_client.put_object(Bucket=bucket_name, Key=status_key, Body=status_content)
         logger.info(f"Created status.json file: {status_key}")
+        
     except ClientError as e:
-        logger.error(f"Error creating status.json file: {str(e)}")
+        logger.error(f"S3 error while checking files or creating status.json: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Error in create_status_file: {str(e)}")
+        raise
 
+    
 def check_combine_folder(bucket_name, prefix):
     """
     Check if the /combine/ folder exists and contains files.
@@ -250,22 +294,26 @@ def main(input_json):
             create_status_file(bucket_name, user_id, case_id)
             logger.info("Processing completed successfully")
 
-            # Prepare input for generate_html.py
-            html_input = json.dumps({
+                        # Replace the commented HTML generation section with:
+            transform_input = json.dumps({
                 'bucket': bucket_name,
                 'user_id': user_id,
                 'case_id': case_id,
                 'input_prefix': output_prefix,
-                'output_prefix': f"{user_id}/{case_id}/html/"
+                'output_prefix': f"{user_id}/{case_id}/transformed/"
             })
 
-            # Call generate_html.py as a subprocess
             try:
-                result = subprocess.run(['python', 'generate_html.py', html_input],check=True)
-                logger.info(f"generate_html.py completed successfully. Output: {result.stdout}")
+                result = subprocess.run(
+                    ['python', 'transform.py', transform_input],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                logger.info(f"transform_json.py completed successfully. Output: {result.stdout}")
             except subprocess.CalledProcessError as e:
-                logger.error(f"Error running generate_html.py: {e}")
-                logger.error(f"generate_html.py error output: {e.stderr}")
+                logger.error(f"Error running transform_json.py: {e}")
+                logger.error(f"transform_json.py error output: {e.stderr}")
         else:
             logger.warning(f"No files were processed for user_id: {user_id}, case_id: {case_id}")
 

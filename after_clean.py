@@ -143,7 +143,7 @@ def update_references(data, page_number_str, path_to_filename_pdf, total_pages, 
             if key == "References" and isinstance(value, dict):
                 value['ThisIsPageNumberOfPDF'] = page_number_str
                 value['PathToFilenamePDF'] = path_to_filename_pdf
-                value['BillingOrRecordDocument'] = document_type
+                value['DocumentType'] = document_type
                 value['TotalPagesInPDF'] = total_pages
             else:
                 update_references(value, page_number_str, path_to_filename_pdf, total_pages, document_type)

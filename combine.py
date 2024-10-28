@@ -10,7 +10,6 @@ from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import subprocess
 
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', force=True)
 logger = logging.getLogger(__name__)
 
@@ -18,6 +17,59 @@ logger = logging.getLogger(__name__)
 s3_client = boto3.client('s3')
 
 MAX_WORKERS = 10
+
+def consolidate_patient_information(contents_by_date):
+    """
+    Create a consolidated PatientInformation object using first non-null values found across all dates.
+    Special handling for DoctorFirstNameLastName to preserve existing non-empty lists.
+    """
+    consolidated_info = {
+        "PatientFirstNameLastName": None,
+        "MedicalFacility": None,
+        "DoctorFirstNameLastName": [],
+        "ReferredTo": [],
+        "ReferredBy": []
+    }
+
+    # First pass: find first non-null values for each field
+    for date, records in contents_by_date.items():
+        for record in records:
+            patient_info = record.get("PatientInformation", {})
+
+            # Handle simple string fields
+            for field in ["PatientFirstNameLastName", "MedicalFacility"]:
+                if consolidated_info[field] is None and patient_info.get(field):
+                    consolidated_info[field] = patient_info[field]
+
+            # Handle list fields
+            for field in ["ReferredTo", "ReferredBy"]:
+                if not consolidated_info[field] and patient_info.get(field):
+                    consolidated_info[field] = patient_info[field]
+
+            # Special handling for doctors - keep first non-empty list
+            if not consolidated_info["DoctorFirstNameLastName"] and patient_info.get("DoctorFirstNameLastName"):
+                consolidated_info["DoctorFirstNameLastName"] = patient_info["DoctorFirstNameLastName"]
+    # Second pass: update all records with consolidated information
+    for date, records in contents_by_date.items():
+        for record in records:
+            patient_info = record.get("PatientInformation", {})
+
+            # Update simple string fields if they're null
+            for field in ["PatientFirstNameLastName", "MedicalFacility"]:
+                if not patient_info.get(field):
+                    patient_info[field] = consolidated_info[field]
+
+            # Update list fields if they're empty
+            for field in ["ReferredTo", "ReferredBy"]:
+                if not patient_info.get(field):
+                    patient_info[field] = consolidated_info[field]
+
+            # Special handling for doctors - only update if empty
+            if not patient_info.get("DoctorFirstNameLastName"):
+                patient_info["DoctorFirstNameLastName"] = consolidated_info["DoctorFirstNameLastName"]
+
+            record["PatientInformation"] = patient_info
+    return contents_by_date
 
 def extract_first_date_from_content(content):
     date_patterns = [
@@ -107,6 +159,8 @@ def process_files(bucket, after_clean_prefix):
             except Exception as e:
                 logger.error(f"Error processing file {key}: {str(e)}")
 
+    # Consolidate patient information across all dates
+    contents_by_date = consolidate_patient_information(contents_by_date)
     return contents_by_date
 
 def main(input_json):
@@ -155,7 +209,9 @@ def main(input_json):
         # Trigger the next step
         logger.info("Triggering complete.py")
         try:
-            subprocess.run(['python', 'complete.py', next_step_input], check=True)
+            subprocess.run(['python', 'complete.py', next_step_input], check=True, 
+                                    capture_output=True, 
+                                    text=True)
         except subprocess.CalledProcessError as e:
             logger.error(f"Error executing after_combine.py: {e}")
             sys.exit(1)

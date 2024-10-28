@@ -4,6 +4,7 @@ import logging
 import fitz
 import boto3
 import base64
+from dotenv import load_dotenv
 from botocore.exceptions import ClientError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from anthropic import Anthropic, APIError
@@ -12,6 +13,9 @@ import csv
 import time
 import sys
 import subprocess
+
+# Load environment variables
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', force=True)
@@ -25,6 +29,9 @@ anthropic_client = Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
 MAX_WORKERS = 10000
 IMAGE_MEDIA_TYPE = "image/png"
 PROMPT_BUCKET = os.environ['PROMPT_BUCKET']
+BILL_PROMPT_IMAGES = os.environ['BILL_PROMPT_IMAGES']  
+BILL_PROMPT_FILES = os.environ['BILL_PROMPT_FILES']    
+
 
 def start_textract_job(bucket_name, pdf_key):
     response = textract_client.start_document_analysis(
@@ -179,15 +186,16 @@ def encode_files_for_payload():
     encoded_images = {}
     encoded_files = {}
     
-    for image_name in ['training_image1.png', 'training_image2.png', 'training_image3.png']:
+    # Read image names from environment variable
+    image_names = BILL_PROMPT_IMAGES.split(',')
+    print('image name => ', image_names);
+    for image_name in image_names:
         response = s3_client.get_object(Bucket=PROMPT_BUCKET, Key=f"bills/step1/{image_name}")
         encoded_images[image_name] = base64.b64encode(response['Body'].read()).decode('utf-8')
     
-    files_to_read = [
-        'training_prompt1.xml', 'training_prompt2.xml', 'training_prompt3.xml', 'system_prompt.xml',
-        'training_example_template.json', 'training_response1.json',
-        'training_response2.json', 'training_response3.json'
-    ]
+    # Read files from environment variable
+    files_to_read = BILL_PROMPT_FILES.split(',')
+    print('files => ', files_to_read);
     for file_name in files_to_read:
         response = s3_client.get_object(Bucket=PROMPT_BUCKET, Key=f"bills/step1/{file_name}")
         encoded_files[file_name] = response['Body'].read().decode('utf-8')
@@ -600,3 +608,4 @@ if __name__ == "__main__":
     
     json_input = sys.argv[1]
     main(json_input)
+

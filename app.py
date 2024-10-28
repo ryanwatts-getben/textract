@@ -41,14 +41,18 @@ def process():
         bucket_name = data['bucket']
         records = data.get('records', [])
         bills = data.get('bills', [])
+        accident_reports = data.get('reports', [])
         total_records = len(records)
         total_bills = len(bills)
         logger.info(f'Total records: {total_records}, Total bills: {total_bills}')
         
+        for accident_report in accident_reports:
+            process_file(bucket_name, accident_report['file_path'], 'split_reports.py')
         for record in records:
             process_file(bucket_name, record['file_path'], 'split_records.py')
         for bill in bills:
             process_file(bucket_name, bill['file_path'], 'split_bills.py')
+       
         
         logger.info(f"Successfully processed {total_records} records and {total_bills} bills")
         return jsonify({"status": "success", "message": f"Successfully processed {total_records} records and {total_bills} bills"}), 200

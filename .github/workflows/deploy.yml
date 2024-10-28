@@ -15,6 +15,12 @@ env:
   AWS_TEXTRACT_BUCKET_NAME: ${{ secrets.AWS_TEXTRACT_BUCKET_NAME }}
   PROMPT_BUCKET: ${{ secrets.PROMPT_BUCKET }}
   TEMPLATE_FILE: ${{ secrets.TEMPLATE_FILE }}
+  MAX_WORKERS: ${{ secrets.MAX_WORKERS }}
+  BILL_PROMPT_FILES: ${{ secrets.BILL_PROMPT_FILES }}
+  RECORD_PROMPT_FILES: ${{ secrets.RECORD_PROMPT_FILES }}
+  BILL_PROMPT_IMAGES: ${{ secrets.BILL_PROMPT_IMAGES }}
+  RECORD_PROMPT_IMAGES: ${{ secrets.RECORD_PROMPT_IMAGES }}
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -37,13 +43,18 @@ jobs:
           echo "PORT=${{ secrets.PORT }}"  >> .env
           echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}"  >> .env
           echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}"  >> .env
-          echo "AWS_REGION=$${{secrets.AWS_REGION }}"  >> .env
+          echo "AWS_REGION=${{ secrets.AWS_REGION }}"  >> .env
           echo "TEMPLATE_FILE_NAME=${{ secrets.TEMPLATE_FILE_NAME }}"  >> .env
           echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
           echo "AWS_TEXTRACT_BUCKET_NAME=${{ secrets.AWS_TEXTRACT_BUCKET_NAME }}" >> .env
           echo "PROMPT_BUCKET=${{ secrets.PROMPT_BUCKET }}" >> .env
           echo "TEMPLATE_FILE=${{ secrets.TEMPLATE_FILE }}" >> .env
           echo "APP_NAME=${{secrets.APP_NAME}}" >> .env
+          echo "MAX_WORKERS=${{ secrets.MAX_WORKERS }}" >> .env
+          echo "BILL_PROMPT_FILES=${{ secrets.BILL_PROMPT_FILES }}" >> .env
+          echo "RECORD_PROMPT_FILES=${{ secrets.RECORD_PROMPT_FILES }}" >> .env
+          echo "BILL_PROMPT_IMAGES=${{ secrets.BILL_PROMPT_IMAGES }}" >> .env
+          echo "RECORD_PROMPT_IMAGES=${{ secrets.RECORD_PROMPT_IMAGES }}" >> .env
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -103,4 +114,3 @@ jobs:
 
             # Save the PM2 process list to synchronize it
             pm2 save
-
