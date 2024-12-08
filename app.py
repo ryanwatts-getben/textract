@@ -159,7 +159,7 @@ def query():
                 logger.info('[app] Index loaded from cache successfully')
             
             except ClientError as e:
-                logger.warning(f'[app] ClientError encountered: {str(e)}')
+                logger.error(f'[app] ClientError encountered when accessing bucket "{AWS_UPLOAD_BUCKET_NAME}": {str(e)}')
                 SUPPORTED_EXTENSIONS = {'.txt', '.pdf', '.doc', '.docx', '.json'}
 
                 if e.response['Error']['Code'] == "404":
