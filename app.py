@@ -3,12 +3,18 @@ import logging
 import os
 import subprocess
 from flask import Flask, request, jsonify
+from rag import load_documents, create_index, query_index
+from flask_cors import CORS  # Optional: for cross-origin requests
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app)  # Optional: Enable CORS
 
 def process_file(bucket_name, file_path, script_name):
     user_id, case_id = file_path.split('/')[:2]
@@ -60,5 +66,37 @@ def process():
         logger.error(f"Error occurred while processing records and bills: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# New route for handling queries
+@app.route('/query', methods=['POST'])
+def query():
+    """
+    Handle queries to the RAG system.
+    Expects a JSON payload with a 'query' field containing the user's question.
+    """
+    try:
+        data = request.json
+        query_text = data.get('query', '')
+
+        if not query_text:
+            logger.error('[app] Query text is missing in the request')
+            return jsonify({'status': 'error', 'message': 'Query text is required'}), 400
+
+        # Load documents and create index
+        documents = load_documents(directory="./data")
+        index = create_index(documents, data_directory="./data")
+        logger.info('[app] Index loaded and created successfully')
+
+        # Query the index
+        response_text = query_index(index, query_text)
+        logger.info('[app] Query processed successfully')
+
+        # Return the response
+        return jsonify({'status': 'success', 'response': response_text}), 200
+
+    except Exception as e:
+        logger.error(f'[app] Error occurred while processing query: {str(e)}')
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 if __name__ == "__main__":
+    # Run the Flask app on port 5001
     app.run(host='0.0.0.0', port=5001, debug=True)
