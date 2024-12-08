@@ -112,9 +112,11 @@ def query():
         data = request.json
         logger.debug(f'[app] Request JSON data: {data}')
         
-        query_text = data.get('query', '')
-        project_id = data.get('projectId', '')
-        user_id = data.get('userId', '')
+        # Handle both naming conventions
+        query_text = data.get('query_text') or data.get('query', '')
+        project_id = data.get('project_id') or data.get('projectId', '')
+        user_id = data.get('user_id') or data.get('userId', '')
+        
         logger.debug(f'[app] Extracted query_text: "{query_text}", project_id: "{project_id}", user_id: "{user_id}"')
     
         if not query_text:
