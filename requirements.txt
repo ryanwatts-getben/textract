@@ -1,7 +1,8 @@
 boto3
 PyMuPDF
 botocore
-Flask
+flask
+flask_cors
 fuzzywuzzy
 jinja2
 python-dateutil
