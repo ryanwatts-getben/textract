@@ -106,11 +106,18 @@ jobs:
             # Install dependencies
             pip install -r requirements.txt
 
+            # Deactivate virtual environment (optional)
+            deactivate
+
             # Delete the existing process if it exists, suppressing the error message
             pm2 delete --silent ${{ secrets.APP_NAME }} || true
 
-            # Start the application using PM2
-            pm2 start "python app.py" --name ${{ secrets.APP_NAME }} -- --port ${{ secrets.PORT }}
+            # Start the application using PM2 with the virtual environment's Python interpreter
+            pm2 start "/var/www/${{ secrets.APP_NAME }}/app.py" \
+              --name ${{ secrets.APP_NAME }} \
+              --interpreter "/var/www/${{ secrets.APP_NAME }}/venv/bin/python" \
+              --interpreter-args "-u" \
+              -- --port ${{ secrets.PORT }}
 
             # Save the PM2 process list to synchronize it
             pm2 save
