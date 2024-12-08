@@ -1,10 +1,14 @@
 boto3
 PyMuPDF
-anthropic
 botocore
 Flask
-python-dotenv
 fuzzywuzzy
 jinja2
 python-dateutil
 python-Levenshtein
+llama-index>=0.12.3
+langchain-huggingface>=0.1.2
+anthropic>=0.40.0
+torch>=2.5.1
+sentence-transformers>=3.3.1
+python-dotenv>=1.0.1
