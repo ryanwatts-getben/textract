@@ -20,16 +20,16 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'https://dev.everycase.ai').split(',')
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "https://dev.everycase.ai",
+    "http://localhost:5001"
+]
 
 # Update CORS configuration
 CORS(app, resources={
     r"/*": {
-        "origins": [
-            "http://localhost:3000",           # Local development
-            "https://dev.everycase.ai",        # Production
-            "http://localhost:5001"            # Flask server
-        ],
+        "origins": ALLOWED_ORIGINS,
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": [
             "Content-Type",
@@ -40,7 +40,8 @@ CORS(app, resources={
             "Access-Control-Request-Method",
             "Access-Control-Request-Headers"
         ],
-        "supports_credentials": True
+        "supports_credentials": True,
+        "expose_headers": ["Content-Type", "Authorization"]
     }
 })
 
