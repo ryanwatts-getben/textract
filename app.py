@@ -19,7 +19,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
+
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'https://dev.everycase.ai').split(',')
+
+# Replace the simple CORS(app) with a more specific configuration
+CORS(app, resources={
+    r"/*": {
+        "origins": ALLOWED_ORIGINS,
+        "methods": ["POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 AWS_UPLOAD_BUCKET_NAME = os.environ.get('AWS_UPLOAD_BUCKET_NAME', 'your-default-bucket-name')
 
@@ -113,7 +123,7 @@ def query():
             logger.info(f'[app] Created temporary directory at {temp_dir}')
             index_cache_path = os.path.join(temp_dir, 'index_cache.pkl')
             logger.info(f'[app] Created index cache path at {index_cache_path}')
-    
+
             # Check if index cache exists in S3
             try:
                 logger.debug(f'[app] Checking existence of index cache in S3 bucket "{AWS_UPLOAD_BUCKET_NAME}" with key "{index_cache_key}"')
@@ -131,9 +141,11 @@ def query():
                 with open(index_cache_path, 'rb') as f:
                     index = pickle.load(f)
                 logger.info('[app] Index loaded from cache successfully')
-    
+            
             except ClientError as e:
                 logger.warning(f'[app] ClientError encountered: {str(e)}')
+                SUPPORTED_EXTENSIONS = {'.txt', '.pdf', '.doc', '.docx', '.json'}
+
                 if e.response['Error']['Code'] == "404":
                     logger.info('[app] Index cache not found in S3, initiating index creation process')
                     # List and download all text files under the user's project directory
@@ -146,21 +158,31 @@ def query():
                         logger.debug(f'[app] Processing page {page_number} of S3 paginator')
                         for obj in page.get('Contents', []):
                             key = obj['Key']
+                            file_extension = os.path.splitext(key)[1].lower()
+
                             logger.debug(f'[app] Evaluating object key: "{key}"')
-                            if key.endswith('.txt'):
+                            if file_extension in SUPPORTED_EXTENSIONS:
                                 local_path = os.path.join(temp_dir, os.path.basename(key))
-                                logger.debug(f'[app] Downloading text file "{key}" to "{local_path}"')
+                                logger.debug(f'[app] Downloading file "{key}" to "{local_path}"')
                                 s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=key, Filename=local_path)
-                                logger.info(f'[app] Downloaded "{key}" successfully')
-    
-                                with open(local_path, 'r') as file:
-                                    content = file.read()
-                                    # Preprocess content if necessary
-                                    content = preprocess_document(content)
-                                    document = Document(text=content)
-                                    documents.append(document)
-                                    logger.debug(f'[app] Read and added Document from "{local_path}"')
-    
+                                
+                                with open(local_path, 'r', encoding='utf-8') as file:
+                                    try:
+                                        if file_extension == '.txt':
+                                            content = file.read()
+                                        elif file_extension == '.json':
+                                            content = json.load(file)
+                                            # Convert JSON to text representation
+                                            content = json.dumps(content, indent=2)
+                                        # Add handlers for other file types here
+                                        
+                                        content = preprocess_document(content)
+                                        document = Document(text=content)
+                                        documents.append(document)
+                                        logger.debug(f'[app] Read and added Document from "{local_path}"')
+                                    except Exception as e:
+                                        logger.error(f'[app] Error processing file {key}: {str(e)}')
+                    
                     if not documents:
                         logger.error('[app] No documents found for user/project in S3')
                         return jsonify({'status': 'error', 'message': 'No documents found for user/project'}), 404
