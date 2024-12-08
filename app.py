@@ -22,12 +22,25 @@ app = Flask(__name__)
 
 ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'https://dev.everycase.ai').split(',')
 
-# Replace the simple CORS(app) with a more specific configuration
+# Update CORS configuration
 CORS(app, resources={
     r"/*": {
-        "origins": ALLOWED_ORIGINS,
-        "methods": ["POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
+        "origins": [
+            "http://localhost:3000",           # Local development
+            "https://dev.everycase.ai",        # Production
+            "http://localhost:5001"            # Flask server
+        ],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": [
+            "Content-Type",
+            "Authorization",
+            "X-Requested-With",
+            "Accept",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers"
+        ],
+        "supports_credentials": True
     }
 })
 
