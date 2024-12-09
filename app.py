@@ -12,6 +12,8 @@ from botocore.exceptions import ClientError
 from llama_index.core import Document  # Import Document from llama_index
 import re
 from dotenv import load_dotenv
+from PyPDF2 import PdfReader
+import io
 
 load_dotenv()
 
@@ -133,6 +135,48 @@ def query():
             return jsonify({'status': 'error', 'message': 'User ID and Project ID are required'}), 400
         logger.info('[app] User ID and Project ID received and validated')
     
+        # Define both root and input paths
+        root_prefix = f"{user_id}/{project_id}/"
+        input_prefix = f"{user_id}/{project_id}/input/"
+        index_cache_key = f"{user_id}/{project_id}/index.pkl"
+        
+        logger.info(f'[app] Looking for documents in root prefix: {root_prefix} and input prefix: {input_prefix}')
+        
+        # List files from both locations
+        documents = []
+        paginator = s3_client.get_paginator('list_objects_v2')
+        
+        # Check both paths
+        for prefix in [root_prefix, input_prefix]:
+            pages = paginator.paginate(Bucket=AWS_UPLOAD_BUCKET_NAME, Prefix=prefix)
+            
+            file_count = 0
+            for page in pages:
+                if 'Contents' not in page:
+                    logger.warning(f'[app] No contents found in page for prefix: {prefix}')
+                    continue
+                
+                for obj in page.get('Contents', []):
+                    file_count += 1
+                    key = obj['Key']
+                    file_extension = os.path.splitext(key)[1].lower()
+                    logger.info(f'[app] Found file: {key} with extension: {file_extension}')
+                    
+                    if file_extension in SUPPORTED_EXTENSIONS:
+                        logger.info(f'[app] Processing supported file: {key}')
+                        # ... rest of file processing code ...
+                    else:
+                        logger.info(f'[app] Skipping unsupported file: {key}')
+
+            logger.info(f'[app] Found {file_count} files in {prefix}')
+
+        if not documents:
+            logger.error(f'[app] No documents found in either location')
+            return jsonify({
+                'status': 'error', 
+                'message': 'No documents found to index. Please upload documents first.'
+            }), 404
+
         # Define S3 paths
         s3_prefix = f"{user_id}/{project_id}/"
         index_cache_key = f"{s3_prefix}index.pkl"
@@ -191,43 +235,30 @@ def query():
                         documents = []
                         paginator = s3_client.get_paginator('list_objects_v2')
                         pages = paginator.paginate(Bucket=AWS_UPLOAD_BUCKET_NAME, Prefix=s3_prefix)
-                        logger.debug('[app] Listing objects in S3 bucket for documents')
-    
-                        for page_number, page in enumerate(pages, start=1):
-                            logger.debug(f'[app] Processing page {page_number} of S3 paginator')
+                        logger.info(f'[app] Searching for files in bucket: {AWS_UPLOAD_BUCKET_NAME} with prefix: {s3_prefix}')
+
+                        # Add detailed logging for S3 listing
+                        file_count = 0
+                        for page in pages:
+                            if 'Contents' not in page:
+                                logger.warning(f'[app] No contents found in page for prefix: {s3_prefix}')
+                                continue
+                            
                             for obj in page.get('Contents', []):
+                                file_count += 1
                                 key = obj['Key']
                                 file_extension = os.path.splitext(key)[1].lower()
-
-                                logger.debug(f'[app] Evaluating object key: "{key}"')
+                                logger.info(f'[app] Found file: {key} with extension: {file_extension}')
+                                
                                 if file_extension in SUPPORTED_EXTENSIONS:
-                                    raw_filename = os.path.basename(key)
-                                    sanitized_filename = sanitize_filename(raw_filename)
-                                    local_path = os.path.join(temp_dir, sanitized_filename)
-                                    logger.debug(f'[app] Downloading file "{key}" to "{local_path}"')
-                                    s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=key, Filename=local_path)
-                                    
-                                    with open(local_path, 'r', encoding='utf-8') as file:
-                                        try:
-                                            if file_extension == '.txt':
-                                                content = file.read()
-                                            elif file_extension == '.json':
-                                                content = json.load(file)
-                                                # Convert JSON to text representation
-                                                content = json.dumps(content, indent=2)
-                                            # Add handlers for other file types here
-                                            
-                                            content = preprocess_document(content)
-                                            document = Document(text=content)
-                                            documents.append(document)
-                                            logger.debug(f'[app] Read and added Document from "{local_path}"')
-                                        except Exception as e:
-                                            logger.error(f'[app] Error processing file {key}: {str(e)}')
-                    
-                        if not documents:
-                            logger.error(f'[app] No documents found for user/project in S3 "{user_id}/{project_id}"')
-                            return jsonify({'status': 'error', 'message': f'No documents found for "{user_id}/{project_id}"'}), 404
-                        logger.info(f'[app] Retrieved {len(documents)} documents from S3')
+                                    logger.info(f'[app] Processing supported file: {key}')
+                                else:
+                                    logger.info(f'[app] Skipping unsupported file: {key}')
+
+                        if file_count == 0:
+                            logger.error(f'[app] No files found in bucket {AWS_UPLOAD_BUCKET_NAME} with prefix {s3_prefix}')
+                            return jsonify({'status': 'error', 'message': f'No files found in bucket {AWS_UPLOAD_BUCKET_NAME} with prefix {s3_prefix}'}), 404
+                        logger.info(f'[app] Retrieved {file_count} files from S3')
     
                         # Define cache paths
                         cache_path = os.path.join(temp_dir, 'index.pkl')
