@@ -200,8 +200,8 @@ def query():
                                         logger.error(f'[app] Error processing file {key}: {str(e)}')
                     
                     if not documents:
-                        logger.error('[app] No documents found for user/project in S3')
-                        return jsonify({'status': 'error', 'message': 'No documents found for user/project'}), 404
+                        logger.error(f'[app] No documents found for user/project in S3 "{user_id}/{project_id}"')
+                        return jsonify({'status': 'error', 'message': f'No documents found for "{user_id}/{project_id}"'}), 404
                     logger.info(f'[app] Retrieved {len(documents)} documents from S3')
     
                     # Define cache paths
