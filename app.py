@@ -11,6 +11,9 @@ import pickle
 from botocore.exceptions import ClientError
 from llama_index.core import Document  # Import Document from llama_index
 import re
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(
