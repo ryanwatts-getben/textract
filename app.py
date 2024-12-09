@@ -141,101 +141,125 @@ def query():
             index_cache_path = os.path.join(temp_dir, 'index.pkl')
             logger.info(f'[app] Created index cache path at {index_cache_path}')
 
-            # Check if index cache exists in S3
-            try:
-                logger.debug(f'[app] Checking existence of index cache in S3 bucket "{AWS_UPLOAD_BUCKET_NAME}" with key "{index_cache_key}"')
-                s3_client.head_object(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_cache_key)
-                logger.info('[app] Index cache found in S3')
-    
-                # Download index cache
-                index_cache_path = os.path.join(temp_dir, 'index.pkl')
-                logger.debug(f'[app] Downloading index cache from S3 to "{index_cache_path}"')
-                s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_cache_key, Filename=index_cache_path)
-                logger.info('[app] Index cache downloaded successfully')
-    
-                # Load the index from the cache
-                logger.debug(f'[app] Loading index from "{index_cache_path}"')
-                with open(index_cache_path, 'rb') as f:
-                    index = pickle.load(f)
-                logger.info('[app] Index loaded from cache successfully')
-            
-            except ClientError as e:
-                logger.error(f'[app] ClientError encountered when accessing bucket "{AWS_UPLOAD_BUCKET_NAME}": {str(e)}')
-                SUPPORTED_EXTENSIONS = {'.txt', '.pdf', '.doc', '.docx', '.json'}
+            # Check if local index cache exists and matches the current userId/projectId
+            local_cache_path = 'index.pkl'  # Define a path for the local cache
+            if os.path.exists(local_cache_path):
+                with open(local_cache_path, 'rb') as f:
+                    try:
+                        local_index = pickle.load(f)
+                        if local_index['user_id'] == user_id and local_index['project_id'] == project_id:
+                            logger.info('[app] Using local index cache')
+                            index = local_index['index']
+                        else:
+                            logger.info('[app] Local index cache does not match current userId/projectId')
+                            index = None
+                    except Exception as e:
+                        logger.error(f'[app] Error loading local index cache: {str(e)}')
+                        index = None
+            else:
+                index = None
 
-                if e.response['Error']['Code'] == "404":
-                    logger.info('[app] Index cache not found in S3, initiating index creation process')
-                    # List and download all text files under the user's project directory
-                    documents = []
-                    paginator = s3_client.get_paginator('list_objects_v2')
-                    pages = paginator.paginate(Bucket=AWS_UPLOAD_BUCKET_NAME, Prefix=s3_prefix)
-                    logger.debug('[app] Listing objects in S3 bucket for documents')
+            if index is None:
+                # Check if index cache exists in S3
+                try:
+                    logger.debug(f'[app] Checking existence of index cache in S3 bucket "{AWS_UPLOAD_BUCKET_NAME}" with key "{index_cache_key}"')
+                    s3_client.head_object(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_cache_key)
+                    logger.info('[app] Index cache found in S3')
     
-                    for page_number, page in enumerate(pages, start=1):
-                        logger.debug(f'[app] Processing page {page_number} of S3 paginator')
-                        for obj in page.get('Contents', []):
-                            key = obj['Key']
-                            file_extension = os.path.splitext(key)[1].lower()
+                    # Download index cache
+                    index_cache_path = os.path.join(temp_dir, 'index.pkl')
+                    logger.debug(f'[app] Downloading index cache from S3 to "{index_cache_path}"')
+                    s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_cache_key, Filename=index_cache_path)
+                    logger.info('[app] Index cache downloaded successfully')
+    
+                    # Load the index from the cache
+                    logger.debug(f'[app] Loading index from "{index_cache_path}"')
+                    with open(index_cache_path, 'rb') as f:
+                        index = pickle.load(f)
+                    logger.info('[app] Index loaded from cache successfully')
+                
+                except ClientError as e:
+                    logger.error(f'[app] ClientError encountered when accessing bucket "{AWS_UPLOAD_BUCKET_NAME}": {str(e)}')
+                    SUPPORTED_EXTENSIONS = {'.txt', '.pdf', '.doc', '.docx', '.json'}
 
-                            logger.debug(f'[app] Evaluating object key: "{key}"')
-                            if file_extension in SUPPORTED_EXTENSIONS:
-                                raw_filename = os.path.basename(key)
-                                sanitized_filename = sanitize_filename(raw_filename)
-                                local_path = os.path.join(temp_dir, sanitized_filename)
-                                logger.debug(f'[app] Downloading file "{key}" to "{local_path}"')
-                                s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=key, Filename=local_path)
-                                
-                                with open(local_path, 'r', encoding='utf-8') as file:
-                                    try:
-                                        if file_extension == '.txt':
-                                            content = file.read()
-                                        elif file_extension == '.json':
-                                            content = json.load(file)
-                                            # Convert JSON to text representation
-                                            content = json.dumps(content, indent=2)
-                                        # Add handlers for other file types here
-                                        
-                                        content = preprocess_document(content)
-                                        document = Document(text=content)
-                                        documents.append(document)
-                                        logger.debug(f'[app] Read and added Document from "{local_path}"')
-                                    except Exception as e:
-                                        logger.error(f'[app] Error processing file {key}: {str(e)}')
+                    if e.response['Error']['Code'] == "404":
+                        logger.info('[app] Index cache not found in S3, initiating index creation process')
+                        # List and download all text files under the user's project directory
+                        documents = []
+                        paginator = s3_client.get_paginator('list_objects_v2')
+                        pages = paginator.paginate(Bucket=AWS_UPLOAD_BUCKET_NAME, Prefix=s3_prefix)
+                        logger.debug('[app] Listing objects in S3 bucket for documents')
+    
+                        for page_number, page in enumerate(pages, start=1):
+                            logger.debug(f'[app] Processing page {page_number} of S3 paginator')
+                            for obj in page.get('Contents', []):
+                                key = obj['Key']
+                                file_extension = os.path.splitext(key)[1].lower()
+
+                                logger.debug(f'[app] Evaluating object key: "{key}"')
+                                if file_extension in SUPPORTED_EXTENSIONS:
+                                    raw_filename = os.path.basename(key)
+                                    sanitized_filename = sanitize_filename(raw_filename)
+                                    local_path = os.path.join(temp_dir, sanitized_filename)
+                                    logger.debug(f'[app] Downloading file "{key}" to "{local_path}"')
+                                    s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=key, Filename=local_path)
+                                    
+                                    with open(local_path, 'r', encoding='utf-8') as file:
+                                        try:
+                                            if file_extension == '.txt':
+                                                content = file.read()
+                                            elif file_extension == '.json':
+                                                content = json.load(file)
+                                                # Convert JSON to text representation
+                                                content = json.dumps(content, indent=2)
+                                            # Add handlers for other file types here
+                                            
+                                            content = preprocess_document(content)
+                                            document = Document(text=content)
+                                            documents.append(document)
+                                            logger.debug(f'[app] Read and added Document from "{local_path}"')
+                                        except Exception as e:
+                                            logger.error(f'[app] Error processing file {key}: {str(e)}')
                     
-                    if not documents:
-                        logger.error(f'[app] No documents found for user/project in S3 "{user_id}/{project_id}"')
-                        return jsonify({'status': 'error', 'message': f'No documents found for "{user_id}/{project_id}"'}), 404
-                    logger.info(f'[app] Retrieved {len(documents)} documents from S3')
+                        if not documents:
+                            logger.error(f'[app] No documents found for user/project in S3 "{user_id}/{project_id}"')
+                            return jsonify({'status': 'error', 'message': f'No documents found for "{user_id}/{project_id}"'}), 404
+                        logger.info(f'[app] Retrieved {len(documents)} documents from S3')
     
-                    # Define cache paths
-                    cache_path = os.path.join(temp_dir, 'index.pkl')
+                        # Define cache paths
+                        cache_path = os.path.join(temp_dir, 'index.pkl')
     
-                    # Create index
-                    logger.debug(f'[app] Creating index from documents {documents} client: {s3_client} bucket: {AWS_UPLOAD_BUCKET_NAME} key: {index_cache_key} temp_dir: {temp_dir}')
-                    index = create_index(
-                        documents=documents,
-                        s3_client=s3_client,
-                        bucket_name=AWS_UPLOAD_BUCKET_NAME,
-                        index_cache_key=index_cache_key,
-                        temp_dir=temp_dir,
-                        cache_path=cache_path
-                    )
-                    logger.info('[app] Index created successfully')
+                        # Create index
+                        logger.debug(f'[app] Creating index from documents {documents} client: {s3_client} bucket: {AWS_UPLOAD_BUCKET_NAME} key: {index_cache_key} temp_dir: {temp_dir}')
+                        index = create_index(
+                            documents=documents,
+                            s3_client=s3_client,
+                            bucket_name=AWS_UPLOAD_BUCKET_NAME,
+                            index_cache_key=index_cache_key,
+                            temp_dir=temp_dir,
+                            cache_path=cache_path
+                        )
+                        logger.info('[app] Index created successfully')
     
-                    # Save index to cache and upload to S3
-                    logger.debug(f'[app] Saving index to cache at "{index_cache_path}"')
-                    with open(index_cache_path, 'wb') as f:
-                        pickle.dump(index, f)
-                    logger.info('[app] Index serialized and saved to cache successfully')
+                        # Save index to cache and upload to S3
+                        logger.debug(f'[app] Saving index to cache at "{index_cache_path}"')
+                        with open(index_cache_path, 'wb') as f:
+                            pickle.dump(index, f)
+                        logger.info('[app] Index serialized and saved to cache successfully')
     
-                    logger.debug(f'[app] Uploading index cache to S3 bucket "{AWS_UPLOAD_BUCKET_NAME}" with key "{index_cache_key}"')
-                    s3_client.upload_file(Filename=index_cache_path, Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_cache_key)
-                    logger.info('[app] Index cache uploaded to S3 successfully')
+                        logger.debug(f'[app] Uploading index cache to S3 bucket "{AWS_UPLOAD_BUCKET_NAME}" with key "{index_cache_key}"')
+                        s3_client.upload_file(Filename=index_cache_path, Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_cache_key)
+                        logger.info('[app] Index cache uploaded to S3 successfully')
     
-                else:
-                    logger.error(f'[app] Unexpected error accessing index cache in S3: {str(e)}')
-                    return jsonify({'status': 'error', 'message': 'Error accessing index cache in S3'}), 500
+                    else:
+                        logger.error(f'[app] Unexpected error accessing index cache in S3: {str(e)}')
+                        return jsonify({'status': 'error', 'message': 'Error accessing index cache in S3'}), 500
     
+                # After creating the index, save it to the local cache
+                with open(local_cache_path, 'wb') as f:
+                    pickle.dump({'user_id': user_id, 'project_id': project_id, 'index': index}, f)
+                logger.info('[app] Local index cache updated')
+
             # Query the index
             logger.debug('[app] Performing query on the index')
             response_text = query_index(index, query_text)
