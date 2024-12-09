@@ -49,7 +49,7 @@ CORS(app, resources={
     }
 })
 
-AWS_UPLOAD_BUCKET_NAME = os.environ.get('AWS_UPLOAD_BUCKET_NAME', 'your-default-bucket-name')
+AWS_UPLOAD_BUCKET_NAME = "generate-input-f5bef08a-9228-4f8c-a550-56d842b94088"
 
 s3_client = boto3.client('s3')  # Initialize S3 client
 
