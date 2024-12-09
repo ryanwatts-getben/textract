@@ -99,27 +99,25 @@ jobs:
             # Create virtual environment
             python3 -m venv venv
 
-            # Activate virtual environment
+            # Activate virtual environment and install dependencies
             source venv/bin/activate
-
-            # Upgrade pip
             pip install --upgrade pip
-
-            # Install dependencies
             pip install -r requirements.txt
 
-            # Deactivate virtual environment (optional)
-            deactivate
-
-            # Delete the existing process if it exists, suppressing the error message
+            # Delete the existing process if it exists
             pm2 delete --silent ${{ secrets.APP_NAME }} || true
 
-            # Start the application using PM2 with the virtual environment's Python interpreter
-            pm2 start "/var/www/${{ secrets.APP_NAME }}/app.py" \
+            # Get the absolute path to the virtual environment's Python
+            VENV_PYTHON=$(which python)
+
+            # Start the application using PM2 with the absolute path to virtual env Python
+            pm2 start "app.py" \
               --name ${{ secrets.APP_NAME }} \
-              --interpreter "/var/www/${{ secrets.APP_NAME }}/venv/bin/python" \
+              --interpreter "$VENV_PYTHON" \
               --interpreter-args "-u" \
               -- --port ${{ secrets.PORT }}
 
-            # Save the PM2 process list to synchronize it
+            # Save the PM2 process list
             pm2 save
+
+            # Keep the virtual environment active
