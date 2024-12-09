@@ -10,6 +10,7 @@ import tempfile
 import pickle
 from botocore.exceptions import ClientError
 from llama_index.core import Document  # Import Document from llama_index
+import re
 
 # Set up logging
 logging.basicConfig(
@@ -131,13 +132,13 @@ def query():
     
         # Define S3 paths
         s3_prefix = f"{user_id}/{project_id}/"
-        index_cache_key = f"{s3_prefix}index_cache.pkl"
+        index_cache_key = f"{s3_prefix}index.pkl"
         logger.debug(f'[app] Defined S3 prefix: "{s3_prefix}" and index_cache_key: "{index_cache_key}"')
     
         # Create a temporary directory to store files
         with tempfile.TemporaryDirectory() as temp_dir:
             logger.info(f'[app] Created temporary directory at {temp_dir}')
-            index_cache_path = os.path.join(temp_dir, 'index_cache.pkl')
+            index_cache_path = os.path.join(temp_dir, 'index.pkl')
             logger.info(f'[app] Created index cache path at {index_cache_path}')
 
             # Check if index cache exists in S3
@@ -147,7 +148,7 @@ def query():
                 logger.info('[app] Index cache found in S3')
     
                 # Download index cache
-                index_cache_path = os.path.join(temp_dir, 'index_cache.pkl')
+                index_cache_path = os.path.join(temp_dir, 'index.pkl')
                 logger.debug(f'[app] Downloading index cache from S3 to "{index_cache_path}"')
                 s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_cache_key, Filename=index_cache_path)
                 logger.info('[app] Index cache downloaded successfully')
@@ -178,7 +179,9 @@ def query():
 
                             logger.debug(f'[app] Evaluating object key: "{key}"')
                             if file_extension in SUPPORTED_EXTENSIONS:
-                                local_path = os.path.join(temp_dir, os.path.basename(key))
+                                raw_filename = os.path.basename(key)
+                                sanitized_filename = sanitize_filename(raw_filename)
+                                local_path = os.path.join(temp_dir, sanitized_filename)
                                 logger.debug(f'[app] Downloading file "{key}" to "{local_path}"')
                                 s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=key, Filename=local_path)
                                 
@@ -205,7 +208,7 @@ def query():
                     logger.info(f'[app] Retrieved {len(documents)} documents from S3')
     
                     # Define cache paths
-                    cache_path = os.path.join(temp_dir, 'index_cache.pkl')
+                    cache_path = os.path.join(temp_dir, 'index.pkl')
     
                     # Create index
                     logger.debug(f'[app] Creating index from documents {documents} client: {s3_client} bucket: {AWS_UPLOAD_BUCKET_NAME} key: {index_cache_key} temp_dir: {temp_dir}')
@@ -245,6 +248,10 @@ def query():
     except Exception as e:
         logger.exception(f'[app] Unexpected error occurred while processing query: {str(e)}')
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+def sanitize_filename(filename):
+    # Replace invalid characters with an underscore
+    return re.sub(r'[<>:"/\\|?*]', '_', filename)
 
 if __name__ == "__main__":
     # Run the Flask app on port 5001
