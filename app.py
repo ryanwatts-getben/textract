@@ -133,7 +133,7 @@ def query_index(index: VectorStoreIndex, query_text: str) -> str:
 def query():
     try:
         data = request.json
-        force_refresh = data.get('force_refresh', True)  # Default to True for now
+        force_refresh = data.get('force_refresh', False)  # Default to False now
         
         # Handle both naming conventions
         query_text = data.get('query_text') or data.get('query', '')
@@ -154,75 +154,110 @@ def query():
         s3_prefix = f"{user_id}/{project_id}/input/"
         index_cache_key = f"{user_id}/{project_id}/index.pkl"
         
-        # Process documents and create index
-        documents = []
-        paginator = s3_client.get_paginator('list_objects_v2')
-        pages = paginator.paginate(Bucket=AWS_UPLOAD_BUCKET_NAME, Prefix=s3_prefix)
-        
         with tempfile.TemporaryDirectory() as temp_dir:
             index_cache_path = os.path.join(temp_dir, 'index.pkl')
             
-            for page in pages:
-                if 'Contents' not in page:
-                    continue
+            # Check if index cache exists in S3
+            try:
+                if not force_refresh:
+                    logger.info('[app] Attempting to load cached index from S3')
+                    s3_client.download_file(
+                        Bucket=AWS_UPLOAD_BUCKET_NAME,
+                        Key=index_cache_key,
+                        Filename=index_cache_path
+                    )
                     
-                for obj in page.get('Contents', []):
-                    key = obj.get('Key')
-                    if not key:
+                    with open(index_cache_path, 'rb') as f:
+                        index = pickle.load(f)
+                    
+                    # Verify the index has nodes
+                    if len(index.docstore.docs) > 0:
+                        logger.info(f'[app] Successfully loaded cached index with {len(index.docstore.docs)} nodes')
+                        response_text = query_index(index, query_text)
+                        return jsonify({'status': 'success', 'response': response_text}), 200
+                    else:
+                        logger.warning('[app] Cached index has no nodes, will create new index')
+                        force_refresh = True
+                
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    logger.info('[app] No cached index found, will create new index')
+                else:
+                    logger.error(f'[app] Error accessing S3: {str(e)}')
+                force_refresh = True
+            except Exception as e:
+                logger.error(f'[app] Error loading cached index: {str(e)}')
+                force_refresh = True
+
+            # If we need to create a new index
+            if force_refresh:
+                logger.info('[app] Creating new index')
+                # Process documents and create index
+                documents = []
+                paginator = s3_client.get_paginator('list_objects_v2')
+                pages = paginator.paginate(Bucket=AWS_UPLOAD_BUCKET_NAME, Prefix=s3_prefix)
+                
+                for page in pages:
+                    if 'Contents' not in page:
                         continue
                         
-                    file_extension = os.path.splitext(key)[1].lower()
-                    if file_extension not in SUPPORTED_EXTENSIONS:
-                        continue
-                        
-                    try:
-                        file_name = os.path.basename(key)
-                        local_path = os.path.join(temp_dir, sanitize_filename(file_name))
-                        
-                        # Download file from S3
-                        s3_client.download_file(
-                            Bucket=AWS_UPLOAD_BUCKET_NAME,
-                            Key=key,
-                            Filename=local_path
-                        )
-                        
-                        # Read and validate content
-                        text = read_file_content(local_path)
-                        if text:  # Only add if we got valid content
-                            doc = Document(
-                                text=text,
-                                metadata={
-                                    "source": key,
-                                    "file_name": file_name,
-                                }
+                    for obj in page.get('Contents', []):
+                        key = obj.get('Key')
+                        if not key:
+                            continue
+                            
+                        file_extension = os.path.splitext(key)[1].lower()
+                        if file_extension not in SUPPORTED_EXTENSIONS:
+                            continue
+                            
+                        try:
+                            file_name = os.path.basename(key)
+                            local_path = os.path.join(temp_dir, sanitize_filename(file_name))
+                            
+                            # Download file from S3
+                            s3_client.download_file(
+                                Bucket=AWS_UPLOAD_BUCKET_NAME,
+                                Key=key,
+                                Filename=local_path
                             )
-                            documents.append(doc)
-                            logger.info(f'[app] Added document from {file_name} with {len(text)} characters')
-                        
-                    except Exception as e:
-                        logger.error(f'[app] Error processing file {key}: {e}')
-                        continue
+                            
+                            # Read and validate content
+                            text = read_file_content(local_path)
+                            if text:  # Only add if we got valid content
+                                doc = Document(
+                                    text=text,
+                                    metadata={
+                                        "source": key,
+                                        "file_name": file_name,
+                                    }
+                                )
+                                documents.append(doc)
+                                logger.info(f'[app] Added document from {file_name} with {len(text)} characters')
+                            
+                        except Exception as e:
+                            logger.error(f'[app] Error processing file {key}: {e}')
+                            continue
 
-            if not documents:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'No valid documents found to index. Please check your uploaded files.'
-                }), 404
+                if not documents:
+                    return jsonify({
+                        'status': 'error',
+                        'message': 'No valid documents found to index. Please check your uploaded files.'
+                    }), 404
 
-            # Create new index
-            logger.info(f'[app] Creating new index with {len(documents)} documents')
-            index = create_index(documents)
-            
-            # Save index to cache
-            with open(index_cache_path, 'wb') as f:
-                pickle.dump(index, f)
-            
-            # Upload to S3
-            s3_client.upload_file(
-                Filename=index_cache_path,
-                Bucket=AWS_UPLOAD_BUCKET_NAME,
-                Key=index_cache_key
-            )
+                # Create new index
+                logger.info(f'[app] Creating new index with {len(documents)} documents')
+                index = create_index(documents)
+                
+                # Save index to cache
+                with open(index_cache_path, 'wb') as f:
+                    pickle.dump(index, f)
+                
+                # Upload to S3
+                s3_client.upload_file(
+                    Filename=index_cache_path,
+                    Bucket=AWS_UPLOAD_BUCKET_NAME,
+                    Key=index_cache_key
+                )
 
             # Query the index
             response_text = query_index(index, query_text)
@@ -262,13 +297,19 @@ def read_file_content(file_path):
                                 logger.warning(f'[app] Empty text extracted from page {i+1}/{num_pages}')
                         except Exception as e:
                             logger.error(f'[app] Error extracting text from page {i+1}: {str(e)}')
-                            
+                    
+                    # If no text was extracted, try reading raw bytes
                     if not text.strip():
-                        # Try alternative extraction method
-                        import pdfplumber
-                        with pdfplumber.open(file_path) as pdf:
-                            for page in pdf.pages:
-                                text += page.extract_text() or ''
+                        logger.info('[app] Attempting alternative PDF extraction method')
+                        for i, page in enumerate(pdf_reader.pages):
+                            try:
+                                # Get raw bytes and decode
+                                content = page.get_contents()
+                                if content:
+                                    decoded = content.get_data().decode('utf-8', errors='ignore')
+                                    text += decoded.strip() + '\n'
+                            except Exception as e:
+                                logger.error(f'[app] Error with alternative extraction on page {i+1}: {str(e)}')
                                 
             except Exception as e:
                 logger.error(f'[app] Error reading PDF {file_path}: {str(e)}')
@@ -296,6 +337,10 @@ def read_file_content(file_path):
             logger.warning(f'[app] No valid content extracted from {file_path}')
             return None
             
+        # Clean up the text
+        text = ' '.join(text.split())  # Remove extra whitespace
+        text = text.replace('\x00', '')  # Remove null bytes
+        
         logger.info(f'[app] Successfully extracted {len(text)} characters from {file_path}')
         return text
         
