@@ -129,10 +129,13 @@ def query():
             return jsonify({'status': 'error', 'message': 'Query text is required'}), 400
         logger.info('[app] Query text received and validated')
     
-        if not user_id or not project_id:
-            logger.error('[app] User ID or Project ID is missing in the request')
-            return jsonify({'status': 'error', 'message': 'User ID and Project ID are required'}), 400
-        logger.info('[app] User ID and Project ID received and validated')
+        if not user_id:
+            logger.error('[app] User ID is missing or None')
+            return jsonify({'status': 'error', 'message': 'User ID is required'}), 400
+        if not project_id:
+            logger.error('[app] Project ID is missing or None')
+            return jsonify({'status': 'error', 'message': 'Project ID is required'}), 400
+        logger.info(f'[app] User ID: {user_id}, Project ID: {project_id}')
     
         # Define S3 paths
         s3_prefix = f"{user_id}/{project_id}/input/"
@@ -153,19 +156,33 @@ def query():
                     continue
                 
                 for obj in page.get('Contents', []):
-                    key = obj['Key']
+                    key = obj.get('Key')
+                    if not key:
+                        logger.warning('[app] S3 object missing "Key"')
+                        continue
                     file_extension = os.path.splitext(key)[1].lower()
                     logger.info(f'[app] Found file: {key} with extension: {file_extension}')
                     
                     if file_extension in SUPPORTED_EXTENSIONS:
                         logger.info(f'[app] Processing supported file: {key}')
                         file_name = os.path.basename(key)
+                        if not file_name:
+                            logger.error(f'[app] Unable to extract file name from key: {key}')
+                            continue
                         local_path = os.path.join(temp_dir, sanitize_filename(file_name))
-
+                        if not local_path:
+                            logger.error(f'[app] Failed to create local path for file: {file_name}')
+                            continue
+                        logger.info(f'[app] Local path for downloaded file: {local_path}')
+    
                         # Download file from S3
-                        s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=key, Filename=local_path)
-                        logger.info(f'[app] Downloaded file to {local_path}')
-
+                        try:
+                            s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=key, Filename=local_path)
+                            logger.info(f'[app] Downloaded file to {local_path}')
+                        except Exception as e:
+                            logger.error(f'[app] Failed to download file {key} from S3: {e}')
+                            continue
+    
                         # Read file content
                         try:
                             text = read_file_content(local_path)
@@ -178,14 +195,14 @@ def query():
                             logger.error(f'[app] Failed to process file {key}: {e}')
                     else:
                         logger.info(f'[app] Skipping unsupported file: {key}')
-
+    
             if not documents:
                 logger.error(f'[app] No documents found in S3 for the given project')
                 return jsonify({
                     'status': 'error', 
                     'message': 'No documents found to index. Please upload documents first.'
                 }), 404
-
+    
             # Check if index cache exists in S3
             index_exists = False
             try:
@@ -239,7 +256,7 @@ def query():
             return jsonify({'status': 'success', 'response': response_text}), 200
 
     except Exception as e:
-        logger.exception(f'[app] Unexpected error occurred while processing query: {str(e)}')
+        logger.exception(f'[app] Unexpected error occurred while processing query')
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 def read_file_content(file_path):
