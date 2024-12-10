@@ -128,7 +128,7 @@ def query_index(index: VectorStoreIndex, query_text: str) -> str:
             llm=llm,
             
             # Retrieval Configuration
-            similarity_top_k=5,  # Number of chunks to retrieve
+            similarity_top_k=50,  # Number of chunks to retrieve
             node_postprocessors=[
                 # Add any custom node processors here
                 # Example: SimilarityPostprocessor(similarity_cutoff=0.7)
@@ -137,8 +137,8 @@ def query_index(index: VectorStoreIndex, query_text: str) -> str:
             # Response Generation
             response_mode="compact",  # How to synthesize the response
             response_kwargs={
-                "max_tokens": 1024,  # Max response length
-                "temperature": 0.7,   # Response creativity (0-1)
+                "max_tokens": 8092,  # Max response length
+                "temperature": 0.3,   # Response creativity (0-1)
                 "top_p": 0.9,        # Nucleus sampling parameter
                 "top_k": 50,         # Top-k sampling parameter
             },
