@@ -3,7 +3,7 @@ import logging
 import os
 import subprocess
 from flask import Flask, request, jsonify
-from rag import create_index, query_index  # Ensure these are correctly imported
+from rag import create_index  # Ensure these are correctly imported
 from flask_cors import CORS
 import boto3
 import tempfile
@@ -13,6 +13,8 @@ from llama_index.core import Document  # Import Document from llama_index
 from dotenv import load_dotenv
 import re
 from pypdf import PdfReader
+from llama_index.core import VectorStoreIndex, Document
+from llama_index.llms.anthropic import Anthropic
 
 load_dotenv()
 
@@ -105,201 +107,201 @@ def process():
     except Exception as e:
         logger.error(f"[app] Error occurred while processing records and bills: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
+    
+def query_index(index: VectorStoreIndex, query_text: str) -> str:
+    """Query the index with given text using Claude."""
+    try:
+        # Initialize Claude
+        llm = Anthropic(
+            model="claude-3-5-sonnet-20241022",
+            api_key=os.getenv('ANTHROPIC_API_KEY')
+        )
+
+        # Create query engine with Claude
+        query_engine = index.as_query_engine(
+            llm=llm,
+        )
+        logger.debug(f'[rag] Query Text: {query_text}')
+        response = query_engine.query(query_text)
+        logger.debug(f'[rag] Response Text: {response}')
+        return response.response
+    except Exception as e:
+        logger.error(f"[app] Error querying index: {str(e)}")
+        raise
 
 @app.route('/query', methods=['POST'])
 def query():
-    """
-    Handle queries to the RAG system.
-    Expects a JSON payload with 'query', 'userId', and 'projectId'.
-    """
-    logger.info('[app] Received /query POST request')
     try:
         data = request.json
-        logger.debug(f'[app] Request JSON data: {data}')
+        force_refresh = data.get('force_refresh', True)  # Default to True for now
         
         # Handle both naming conventions
         query_text = data.get('query_text') or data.get('query', '')
         project_id = data.get('project_id') or data.get('projectId', '')
         user_id = data.get('user_id') or data.get('userId', '')
         
-        logger.debug(f'[app] Extracted query_text: "{query_text}", project_id: "{project_id}", user_id: "{user_id}"')
-    
-        if not query_text:
-            logger.error('[app] Query text is missing in the request')
-            return jsonify({'status': 'error', 'message': 'Query text is required'}), 400
-        logger.info('[app] Query text received and validated')
-    
-        if not user_id:
-            logger.error('[app] User ID is missing or None')
-            return jsonify({'status': 'error', 'message': 'User ID is required'}), 400
-        if not project_id:
-            logger.error('[app] Project ID is missing or None')
-            return jsonify({'status': 'error', 'message': 'Project ID is required'}), 400
-        logger.info(f'[app] User ID: {user_id}, Project ID: {project_id}')
-    
+        if not all([query_text, project_id, user_id]):
+            missing = []
+            if not query_text: missing.append('query text')
+            if not project_id: missing.append('project ID')
+            if not user_id: missing.append('user ID')
+            return jsonify({
+                'status': 'error',
+                'message': f'Missing required fields: {", ".join(missing)}'
+            }), 400
+
         # Define S3 paths
         s3_prefix = f"{user_id}/{project_id}/input/"
         index_cache_key = f"{user_id}/{project_id}/index.pkl"
-        logger.info(f'[app] Looking for documents in S3 prefix: {s3_prefix}')
-    
-        # List files from S3
+        
+        # Process documents and create index
         documents = []
         paginator = s3_client.get_paginator('list_objects_v2')
         pages = paginator.paginate(Bucket=AWS_UPLOAD_BUCKET_NAME, Prefix=s3_prefix)
         
-        # Create a temporary directory to store files
         with tempfile.TemporaryDirectory() as temp_dir:
-            logger.info(f'[app] Created temporary directory at {temp_dir}')
+            index_cache_path = os.path.join(temp_dir, 'index.pkl')
+            
             for page in pages:
                 if 'Contents' not in page:
-                    logger.warning(f'[app] No contents found in page for prefix: {s3_prefix}')
                     continue
-                
+                    
                 for obj in page.get('Contents', []):
                     key = obj.get('Key')
                     if not key:
-                        logger.warning('[app] S3 object missing "Key"')
                         continue
+                        
                     file_extension = os.path.splitext(key)[1].lower()
-                    logger.info(f'[app] Found file: {key} with extension: {file_extension}')
-                    
-                    if file_extension in SUPPORTED_EXTENSIONS:
-                        logger.info(f'[app] Processing supported file: {key}')
+                    if file_extension not in SUPPORTED_EXTENSIONS:
+                        continue
+                        
+                    try:
                         file_name = os.path.basename(key)
-                        if not file_name:
-                            logger.error(f'[app] Unable to extract file name from key: {key}')
-                            continue
                         local_path = os.path.join(temp_dir, sanitize_filename(file_name))
-                        if not local_path:
-                            logger.error(f'[app] Failed to create local path for file: {file_name}')
-                            continue
-                        logger.info(f'[app] Local path for downloaded file: {local_path}')
-    
+                        
                         # Download file from S3
-                        try:
-                            s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=key, Filename=local_path)
-                            logger.info(f'[app] Downloaded file to {local_path}')
-                        except Exception as e:
-                            logger.error(f'[app] Failed to download file {key} from S3: {e}')
-                            continue
-    
-                        # Read file content
-                        try:
-                            text = read_file_content(local_path)
-                            if text:
-                                documents.append(Document(text=text))
-                                logger.info(f'[app] Added document from file: {key}')
-                            else:
-                                logger.warning(f'[app] Empty content from file: {key}')
-                        except Exception as e:
-                            logger.error(f'[app] Failed to process file {key}: {e}')
-                    else:
-                        logger.info(f'[app] Skipping unsupported file: {key}')
-    
+                        s3_client.download_file(
+                            Bucket=AWS_UPLOAD_BUCKET_NAME,
+                            Key=key,
+                            Filename=local_path
+                        )
+                        
+                        # Read and validate content
+                        text = read_file_content(local_path)
+                        if text:  # Only add if we got valid content
+                            doc = Document(
+                                text=text,
+                                metadata={
+                                    "source": key,
+                                    "file_name": file_name,
+                                }
+                            )
+                            documents.append(doc)
+                            logger.info(f'[app] Added document from {file_name} with {len(text)} characters')
+                        
+                    except Exception as e:
+                        logger.error(f'[app] Error processing file {key}: {e}')
+                        continue
+
             if not documents:
-                logger.error(f'[app] No documents found in S3 for the given project')
                 return jsonify({
-                    'status': 'error', 
-                    'message': 'No documents found to index. Please upload documents first.'
+                    'status': 'error',
+                    'message': 'No valid documents found to index. Please check your uploaded files.'
                 }), 404
-    
-            # Check if index cache exists in S3
-            index_exists = False
-            try:
-                s3_client.head_object(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_cache_key)
-                index_exists = True
-                logger.info('[app] Index cache found in S3')
-            except ClientError as e:
-                if e.response['Error']['Code'] == "404":
-                    logger.info('[app] Index cache not found in S3')
-                else:
-                    logger.error(f'[app] Error accessing index cache in S3: {str(e)}')
-                    return jsonify({'status': 'error', 'message': 'Error accessing index cache in S3'}), 500
 
-            # Download or create index
-            index = None
-            index_cache_path = os.path.join(temp_dir, 'index.pkl')
-
-            if index_exists:
-                # Download index cache
-                logger.info(f'[app] Downloading index cache from S3 to {index_cache_path}')
-                s3_client.download_file(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_cache_key, Filename=index_cache_path)
-                logger.info('[app] Index cache downloaded successfully')
-
-                # Load the index from the cache
-                logger.info(f'[app] Loading index from {index_cache_path}')
-                with open(index_cache_path, 'rb') as f:
-                    index = pickle.load(f)
-                logger.info('[app] Index loaded from cache successfully')
-            else:
-                # Create index
-                logger.info('[app] Creating new index from documents')
-                index = create_index(documents)
-                logger.info('[app] Index created successfully')
-
-                # Save index to cache and upload to S3
-                with open(index_cache_path, 'wb') as f:
-                    pickle.dump(index, f)
-                logger.info('[app] Index saved locally to cache')
-
-                # Upload index cache to S3
-                logger.info(f'[app] Uploading index cache to S3 at {index_cache_key}')
-                s3_client.upload_file(Filename=index_cache_path, Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_cache_key)
-                logger.info('[app] Index cache uploaded to S3 successfully')
+            # Create new index
+            logger.info(f'[app] Creating new index with {len(documents)} documents')
+            index = create_index(documents)
+            
+            # Save index to cache
+            with open(index_cache_path, 'wb') as f:
+                pickle.dump(index, f)
+            
+            # Upload to S3
+            s3_client.upload_file(
+                Filename=index_cache_path,
+                Bucket=AWS_UPLOAD_BUCKET_NAME,
+                Key=index_cache_key
+            )
 
             # Query the index
-            logger.info('[app] Querying the index')
             response_text = query_index(index, query_text)
-            logger.info('[app] Query processed successfully')
+            if not response_text or response_text == "Empty Response":
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No relevant information found for your query.'
+                }), 404
 
-            # Return the response
             return jsonify({'status': 'success', 'response': response_text}), 200
 
     except Exception as e:
-        logger.exception(f'[app] Unexpected error occurred while processing query')
+        logger.exception(f'[app] Error processing query: {str(e)}')
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 def read_file_content(file_path):
-    """
-    Reads file content based on file type.
-    Returns the text content of the file.
-    """
-    file_lower = file_path.lower()
+    """Reads and validates file content."""
     try:
+        text = ""
+        file_lower = file_path.lower()
+        
         if file_lower.endswith('.pdf'):
-            # Handle PDF files
-            with open(file_path, 'rb') as file:
-                pdf_reader = PdfReader(file)
-                text = ''
-                for page in pdf_reader.pages:
-                    text += page.extract_text() + '\n'
-                return text
+            logger.info(f'[app] Reading PDF file: {file_path}')
+            try:
+                with open(file_path, 'rb') as file:
+                    pdf_reader = PdfReader(file)
+                    num_pages = len(pdf_reader.pages)
+                    logger.info(f'[app] PDF has {num_pages} pages')
+                    
+                    for i, page in enumerate(pdf_reader.pages):
+                        try:
+                            page_text = page.extract_text()
+                            if page_text:
+                                text += page_text.strip() + '\n'
+                                logger.info(f'[app] Successfully extracted page {i+1}/{num_pages} with {len(page_text)} characters')
+                            else:
+                                logger.warning(f'[app] Empty text extracted from page {i+1}/{num_pages}')
+                        except Exception as e:
+                            logger.error(f'[app] Error extracting text from page {i+1}: {str(e)}')
+                            
+                    if not text.strip():
+                        # Try alternative extraction method
+                        import pdfplumber
+                        with pdfplumber.open(file_path) as pdf:
+                            for page in pdf.pages:
+                                text += page.extract_text() or ''
+                                
+            except Exception as e:
+                logger.error(f'[app] Error reading PDF {file_path}: {str(e)}')
+                return None
+                
         elif file_lower.endswith('.json'):
-            # Handle JSON files
+            logger.info(f'[app] Reading JSON file: {file_path}')
             with open(file_path, 'r', encoding='utf-8') as file:
                 data = json.load(file)
-                # Convert JSON to string representation
                 if isinstance(data, dict):
-                    return ' '.join(str(v) for v in data.values() if v)
+                    text = '\n'.join(f"{k}: {v}" for k, v in data.items() if v)
                 elif isinstance(data, list):
-                    return ' '.join(str(item) for item in data if item)
+                    text = '\n'.join(str(item) for item in data if item)
                 else:
-                    return str(data)
-        else:
-            # Handle text files
+                    text = str(data)
+                    
+        else:  # Text files
+            logger.info(f'[app] Reading text file: {file_path}')
             with open(file_path, 'r', encoding='utf-8') as file:
-                return file.read()
-    except UnicodeDecodeError:
-        # Try different encoding if utf-8 fails
-        try:
-            with open(file_path, 'r', encoding='latin-1') as file:
-                return file.read()
-        except Exception as e:
-            logger.error(f"[app] Failed to read file with latin-1 encoding: {e}")
-            raise
+                text = file.read()
+
+        # Validate content
+        text = text.strip()
+        if not text:
+            logger.warning(f'[app] No valid content extracted from {file_path}')
+            return None
+            
+        logger.info(f'[app] Successfully extracted {len(text)} characters from {file_path}')
+        return text
+        
     except Exception as e:
-        logger.error(f"[app] Failed to read file: {e}")
-        raise
+        logger.error(f"[app] Error reading file {file_path}: {e}")
+        return None
 
 def sanitize_filename(filename):
     """
