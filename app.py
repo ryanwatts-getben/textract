@@ -12,6 +12,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 from pathlib import Path
+import os
+from dotenv import load_dotenv
+from pathlib import Path
+
+
 # Third-party imports
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -39,7 +44,9 @@ from disease_definition_generator import generate_multiple_definitions
 # from llama_index.core.storage.index_store import SimpleIndexStore
 # from llama_index.core.vector_stores import SimpleVectorStore
 
-load_dotenv()
+# Load environment variables from .env file
+env_path = Path('/var/www/medchron-api/.env')
+load_dotenv(dotenv_path=env_path)
 
 # Set up logging
 logging.basicConfig(
