@@ -5,9 +5,9 @@ import boto3
 import tempfile
 import pickle
 
-from flask import Flask, request, jsonify
+from flask import request, jsonify
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from botocore.exceptions import ClientError
 
 # Import Hugging Face embedding and LLM models
@@ -27,8 +27,6 @@ import torch
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-app = Flask(__name__)
 # Pydantic models for structured output
 class Symptom(BaseModel):
     name: str
@@ -242,59 +240,38 @@ except Exception as e:
     logger.error("[disease_definition_generator] Engine initialization failed: %s", str(e))
     raise
 
-@app.route('/generate-multiple-disease-definitions', methods=['POST'])
-def generate_definitions():
-    try:
-        logger.info("[disease_definition_generator] Received request to generate disease definitions")
-        # Validate request
-        request_data = request.get_json()
-        logger.info("[disease_definition_generator] Request data received: %s", request_data)
-        if not request_data or 'diseaseNames' not in request_data:
-            logger.warning("[disease_definition_generator] Invalid request: %s", request_data)
-            return jsonify({
-                'error': 'Invalid request. Expected {"diseaseNames": ["disease1", "disease2", ...]}'
-            }), 400
+def generate_multiple_definitions(disease_names: List[str]) -> Dict[str, Any]:
+    """
+    Generate definitions for multiple diseases.
+    
+    Args:
+        disease_names: List of disease names to generate definitions for
+        
+    Returns:
+        Dictionary mapping disease names to their definitions or errors
+    """
+    logger.info("[disease_definition_generator] Processing multiple disease definitions")
+    
+    if not isinstance(disease_names, list) or not all(isinstance(name, str) for name in disease_names):
+        logger.error("[disease_definition_generator] Invalid disease names format")
+        raise ValueError("diseaseNames must be a list of strings")
 
-        disease_names: List[str] = request_data['diseaseNames']
-        logger.info("[disease_definition_generator] Disease names extracted: %s", disease_names)
-        if not isinstance(disease_names, list) or not all(isinstance(name, str) for name in disease_names):
-            logger.warning("[disease_definition_generator] Invalid diseaseNames format: %s", disease_names)
-            return jsonify({
-                'error': 'diseaseNames must be a list of strings'
-            }), 400
+    results = {}
+    for disease in disease_names:
+        logger.info(f"[disease_definition_generator] Generating definition for disease: {disease}")
+        try:
+            definition = engine.generate_definition(disease)
+            results[disease] = definition.dict()
+            logger.info(f"[disease_definition_generator] Definition generated for {disease}")
+        except Exception as e:
+            logger.error(f"[disease_definition_generator] Error generating definition for {disease}: {str(e)}")
+            results[disease] = {'error': str(e)}
 
-        # Generate definitions using the global engine
-        results = {}
-        for disease in disease_names:
-            logger.info("[disease_definition_generator] Generating definition for disease: %s", disease)
-            try:
-                definition = engine.generate_definition(disease)
-                # Convert Pydantic model to dict for JSON response
-                results[disease] = definition.dict()
-                logger.info("[disease_definition_generator] Definition generated for %s", disease)
-            except Exception as e:
-                logger.error("[disease_definition_generator] Error generating definition for %s: %s", disease, str(e))
-                results[disease] = {'error': str(e)}
+    return results
 
-        logger.info("[disease_definition_generator] Definitions generated successfully")
-        return jsonify(results)
-
-    except Exception as e:
-        logger.error("[disease_definition_generator] Server error: %s", str(e))
-        return jsonify({
-            'error': f'Server error: {str(e)}'
-        }), 500
-
-@app.errorhandler(404)
-def not_found(error):
-    logger.warning("[disease_definition_generator] 404 Not Found: %s", request.path)
-    return jsonify({'error': 'Not found'}), 404
-
-@app.errorhandler(500)
-def server_error(error):
-    logger.error("[disease_definition_generator] 500 Internal Server Error: %s", error)
-    return jsonify({'error': 'Internal server error'}), 500
-
-if __name__ == '__main__':
-    logger.info("[disease_definition_generator] Starting Flask app on 0.0.0.0:5001")
-    app.run(host='0.0.0.0', port=5001)
+try:
+    engine = DiseaseDefinitionEngine()
+    logger.info("[disease_definition_generator] DiseaseDefinitionEngine initialized successfully")
+except Exception as e:
+    logger.error("[disease_definition_generator] Engine initialization failed: %s", str(e))
+    raise
