@@ -2,10 +2,13 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+lambda/
+lambda2/
 # C extensions
 *.so
-
+index_storage/
+.test/
+.test2/
 # Distribution / packaging
 .Python
 build/

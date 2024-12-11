@@ -1,0 +1,218 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Disease Definition",
+    "description": "A comprehensive medical disease definition with associated metadata",
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "The official medical name of the disease",
+            "minLength": 1
+        },
+        "alternateNames": {
+            "type": "array",
+            "description": "Alternative names or synonyms for the disease",
+            "items": {
+                "type": "string"
+            }
+        },
+        "icd10": {
+            "type": "string",
+            "description": "The valid ICD-10 code for the disease",
+            "pattern": "^[A-Z][0-9][0-9A-Z](\\.?[0-9]{0,2})?$"
+        },
+        "isGlobal": {
+            "type": "boolean",
+            "description": "Indicates if the disease is globally recognized and documented"
+        },
+        "cptCodes": {
+            "type": "array",
+            "description": "List of valid CPT codes for procedures related to this disease",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "pattern": "^[0-9]{5}$"
+                    },
+                    "description": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "code"
+                ]
+            }
+        },
+        "symptoms": {
+            "type": "array",
+            "description": "List of symptoms associated with the disease",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The medical term for the symptom"
+                    },
+                    "commonality": {
+                        "type": "string",
+                        "enum": [
+                            "VERY_COMMON",
+                            "COMMON",
+                            "UNCOMMON",
+                            "RARE"
+                        ],
+                        "description": "How frequently this symptom occurs"
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": [
+                            "MILD",
+                            "MODERATE",
+                            "SEVERE",
+                            "CRITICAL"
+                        ],
+                        "description": "Typical severity of the symptom"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            }
+        },
+        "labResults": {
+            "type": "array",
+            "description": "List of laboratory tests relevant for diagnosis",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the laboratory test"
+                    },
+                    "range": {
+                        "type": "object",
+                        "properties": {
+                            "min": {
+                                "type": "number"
+                            },
+                            "max": {
+                                "type": "number"
+                            },
+                            "unit": {
+                                "type": "string"
+                            }
+                        },
+                        "required": [
+                            "unit"
+                        ]
+                    },
+                    "significance": {
+                        "type": "string",
+                        "description": "Clinical significance of this test for the disease"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            }
+        },
+        "diagnosticProcedures": {
+            "type": "array",
+            "description": "List of diagnostic procedures used to identify the disease",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the diagnostic procedure"
+                    },
+                    "accuracy": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "description": "Accuracy rate of the diagnostic procedure"
+                    },
+                    "invasiveness": {
+                        "type": "string",
+                        "enum": [
+                            "NON_INVASIVE",
+                            "MINIMALLY_INVASIVE",
+                            "INVASIVE"
+                        ]
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            }
+        },
+        "treatments": {
+            "type": "array",
+            "description": "Available treatments for the disease",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the treatment"
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "MEDICATION",
+                            "SURGERY",
+                            "THERAPY",
+                            "LIFESTYLE",
+                            "OTHER"
+                        ]
+                    },
+                    "effectiveness": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "description": "General effectiveness rate of the treatment"
+                    }
+                },
+                "required": [
+                    "name",
+                    "type"
+                ]
+            }
+        },
+        "prognosis": {
+            "type": "object",
+            "properties": {
+                "survivalRate": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "5-year survival rate if applicable"
+                },
+                "chronicityLevel": {
+                    "type": "string",
+                    "enum": [
+                        "ACUTE",
+                        "SUBACUTE",
+                        "CHRONIC"
+                    ]
+                },
+                "qualityOfLifeImpact": {
+                    "type": "string",
+                    "enum": [
+                        "MILD",
+                        "MODERATE",
+                        "SEVERE"
+                    ]
+                }
+            }
+        }
+    },
+    "required": [
+        "name",
+        "icd10",
+        "isGlobal",
+        "symptoms",
+        "diagnosticProcedures"
+    ]
+}

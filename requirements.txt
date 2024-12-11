@@ -19,3 +19,6 @@ pypdf
 python-dotenv
 pdfplumber
 pdfminer.six
+defusedxml
+langchain
+langchain-community

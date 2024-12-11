@@ -1,26 +1,49 @@
+# Standard library imports
 import json
 import logging
 import os
 import subprocess
-from flask import Flask, request, jsonify
-from rag import create_index  # Ensure these are correctly imported
-from flask_cors import CORS
-import boto3
 import tempfile
 import pickle
-from botocore.exceptions import ClientError
-from llama_index.core import Document  # Import Document from llama_index
-from dotenv import load_dotenv
 import re
-from pypdf import PdfReader
-from llama_index.core import VectorStoreIndex, Document
-from llama_index.llms.anthropic import Anthropic
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import partial
-import pdfplumber  # type: ignore
-from pdfminer.high_level import extract_text as pdfminer_extract_text  # type: ignore
 import io
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Optional
+from pathlib import Path
+
+# Third-party imports
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import boto3
+from botocore.exceptions import ClientError
+from dotenv import load_dotenv
+import xml.etree.ElementTree as ET
+from xml.etree.ElementTree import ParseError
+from defusedxml import ElementTree as DefusedET  # type: ignore
+
+# LlamaIndex imports
+from llama_index.core import (
+    VectorStoreIndex,
+    Document,
+    load_index_from_storage,
+)
+from pypdf import PdfReader
+from llama_index.llms.anthropic import Anthropic
+
+# Local imports
+from rag import create_index
+from disease_definition_generator import query_index_for_disease, Disease
+
+
+
+# from functools import partial
+# from pdfplumber  # type: ignore
+# from pdfminer.high_level import extract_text as pdfminer_extract_text  # type: ignore
+# from llama_index.core.storage.docstore import SimpleDocumentStore
+# from llama_index.core.storage.index_store import SimpleIndexStore
+# from llama_index.core.vector_stores import SimpleVectorStore
 
 load_dotenv()
 
@@ -63,7 +86,7 @@ AWS_UPLOAD_BUCKET_NAME = "generate-input-f5bef08a-9228-4f8c-a550-56d842b94088"
 s3_client = boto3.client('s3')  # Initialize S3 client
 
 # Supported file types
-SUPPORTED_EXTENSIONS = {'.txt', '.pdf', '.json'}
+SUPPORTED_EXTENSIONS = {'.txt', '.pdf', '.json', '.xml', '.xsd'}
 
 def process_file(bucket_name, file_path, script_name):
     user_id, case_id = file_path.split('/')[:2]
@@ -315,10 +338,13 @@ def create_or_update_index(user_id: str, project_id: str, force_refresh: bool = 
             
             # Cache the index
             cache_start_time = time.time()
+            logger.info(f"[app] Saving index to local cache: {index_cache_path}")
             with open(index_cache_path, 'wb') as f:
                 pickle.dump(index, f)
             
+            logger.info(f"[app] Uploading index to S3: s3://{AWS_UPLOAD_BUCKET_NAME}/{index_cache_key}")
             s3_client.upload_file(index_cache_path, AWS_UPLOAD_BUCKET_NAME, index_cache_key)
+            logger.info(f"[app] Index upload complete. Local copy at: {index_cache_path}, S3 copy at: s3://{AWS_UPLOAD_BUCKET_NAME}/{index_cache_key}")
             
             timings['operations'].append({
                 'operation': 'cache_saving',
@@ -337,6 +363,20 @@ def create_or_update_index(user_id: str, project_id: str, force_refresh: bool = 
         total_duration = round(time.time() - timings['start'], 2)
         logger.error(f'[app] Error after {total_duration} seconds: {str(e)}')
         raise
+
+class ProgressPercentage:
+    def __init__(self, filename):
+        self._filename = filename
+        self._size = float(os.path.getsize(filename))
+        self._seen_so_far = 0
+        self._lock = threading.Lock()
+        self.progress = 0
+
+    def __call__(self, bytes_amount):
+        with self._lock:
+            self._seen_so_far += bytes_amount
+            self.progress = (self._seen_so_far / self._size) * 100
+            logger.info(f'[app] Upload progress: {self.progress:.2f}%')
 
 @app.route('/index', methods=['POST'])
 def index():
@@ -361,12 +401,13 @@ def index():
                 'message': f'Missing required fields: {", ".join(missing)}'
             }), 400
 
-        # Create or update the index
         try:
-            _, status_message = create_or_update_index(user_id, project_id, force_refresh)
+            # Create or update the index
+            index, message = create_or_update_index(user_id, project_id, force_refresh)
+            
             return jsonify({
                 'status': 'success',
-                'message': status_message
+                'message': message
             }), 200
             
         except ValueError as ve:
@@ -471,39 +512,39 @@ def read_pdf_with_fallbacks(file_path):
     except Exception as e:
         logger.error(f'[app] PyPDF extraction failed: {str(e)}')
 
-    # Method 2: pdfplumber
-    try:
-        text = ""
-        with pdfplumber.open(file_path) as pdf:
-            for i, page in enumerate(pdf.pages):
-                try:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text += page_text.strip() + '\n'
-                        logger.info(f'[app] pdfplumber: Extracted page {i+1} with {len(page_text)} characters')
-                except Exception as e:
-                    logger.warning(f'[app] pdfplumber failed on page {i+1}: {str(e)}')
+    # # Method 2: pdfplumber
+    # try:
+    #     text = ""
+    #     with pdfplumber.open(file_path) as pdf:
+    #         for i, page in enumerate(pdf.pages):
+    #             try:
+    #                 page_text = page.extract_text()
+    #                 if page_text:
+    #                     text += page_text.strip() + '\n'
+    #                     logger.info(f'[app] pdfplumber: Extracted page {i+1} with {len(page_text)} characters')
+    #             except Exception as e:
+    #                 logger.warning(f'[app] pdfplumber failed on page {i+1}: {str(e)}')
                     
-        if text.strip():
-            text_results.append(('pdfplumber', text))
-    except Exception as e:
-        logger.error(f'[app] pdfplumber extraction failed: {str(e)}')
+    #     if text.strip():
+    #         text_results.append(('pdfplumber', text))
+    # except Exception as e:
+    #     logger.error(f'[app] pdfplumber extraction failed: {str(e)}')
 
-    # Method 3: pdfminer
-    try:
-        text = pdfminer_extract_text(file_path)
-        if text.strip():
-            text_results.append(('pdfminer', text))
-            logger.info(f'[app] pdfminer: Extracted {len(text)} characters')
-    except Exception as e:
-        logger.error(f'[app] pdfminer extraction failed: {str(e)}')
+    # # Method 3: pdfminer
+    # try:
+    #     text = pdfminer_extract_text(file_path)
+    #     if text.strip():
+    #         text_results.append(('pdfminer', text))
+    #         logger.info(f'[app] pdfminer: Extracted {len(text)} characters')
+    # except Exception as e:
+    #     logger.error(f'[app] pdfminer extraction failed: {str(e)}')
 
-    # Choose the best result
-    if text_results:
-        # Sort by text length (assuming longer text is better)
-        text_results.sort(key=lambda x: len(x[1]), reverse=True)
-        method, text = text_results[0]
-        logger.info(f'[app] Using {method} result with {len(text)} characters')
+    # # Choose the best result
+    # if text_results:
+    #     # Sort by text length (assuming longer text is better)
+    #     text_results.sort(key=lambda x: len(x[1]), reverse=True)
+    #     method, text = text_results[0]
+    #     logger.info(f'[app] Using {method} result with {len(text)} characters')
         return clean_text(text)
     
     return None
@@ -541,13 +582,27 @@ def read_file_content(file_path):
             logger.info(f'[app] Reading JSON file: {file_path}')
             with open(file_path, 'r', encoding='utf-8') as file:
                 data = json.load(file)
-                if isinstance(data, dict):
-                    text = '\n'.join(f"{k}: {v}" for k, v in data.items() if v)
-                elif isinstance(data, list):
-                    text = '\n'.join(str(item) for item in data if item)
-                else:
-                    text = str(data)
-                    
+                text = process_json_content(data)
+                
+        elif file_lower.endswith('.xml'):
+            logger.info(f'[app] Reading XML file: {file_path}')
+            with open(file_path, 'r', encoding='utf-8') as file:
+                xml_content = file.read()
+            xsd_content = None
+            # Check for corresponding XSD file
+            xsd_file_path = os.path.splitext(file_path)[0] + '.xsd'
+            if os.path.exists(xsd_file_path):
+                logger.info(f'[app] Found XSD schema: {xsd_file_path}')
+                with open(xsd_file_path, 'r', encoding='utf-8') as xsd_file:
+                    xsd_content = xsd_file.read()
+            text = parse_xml_content(xml_content, xsd_content)
+            
+        elif file_lower.endswith('.xsd'):
+            logger.info(f'[app] Reading XSD file: {file_path} (treating as XML)')
+            with open(file_path, 'r', encoding='utf-8') as file:
+                xml_content = file.read()
+            text = parse_xml_content(xml_content)
+            
         else:  # Text files
             logger.info(f'[app] Reading text file: {file_path}')
             with open(file_path, 'r', encoding='utf-8') as file:
@@ -573,6 +628,220 @@ def sanitize_filename(filename):
     """
     # Replace invalid characters with an underscore
     return re.sub(r'[<>:"/\\|?*]', '_', filename)
+
+# Ensure that the index is initialized or loaded
+# You might need to adjust this depending on your application flow
+index = None  # Placeholder for the index variable
+
+@app.route('/generate-disease-definitions', methods=['POST'])
+def generate_disease_definitions():
+    """
+    Generate structured disease definitions based on the provided disease name.
+    Expected payload: {"diseaseName": "name_of_the_disease"}
+    """
+    try:
+        data = request.json
+        disease_name = data.get('diseaseName')
+        
+        if not disease_name:
+            logger.error(f"[app] Missing 'diseaseName' in request data")
+            return jsonify({
+                "status": "error",
+                "message": "Missing 'diseaseName' in request data"
+            }), 400
+        
+        # Ensure the index is initialized
+        global index
+        if index is None:
+            # Load or create the index
+            # For example:
+            # index, _ = create_or_update_index(user_id, project_id, force_refresh=False)
+            # You'll need to adjust based on how your index is managed
+            pass
+        
+        # Generate structured disease definition using the query function
+        disease_json = query_index_for_disease(index, disease_name)
+        disease_data = Disease.parse_raw(disease_json)
+        
+        # Return the disease data as JSON
+        return jsonify({
+            "status": "success",
+            "data": disease_data.dict()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"[app] Error in generate_disease_definitions: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+def parse_xml_content(xml_content: str, xsd_content: Optional[str] = None) -> str:
+    """
+    Parse XML content and optionally validate against XSD schema.
+    """
+    try:
+        # Parse XML securely using DefusedET
+        root = DefusedET.fromstring(xml_content)
+        
+        # If XSD content is provided, validate XML
+        if xsd_content:
+            logger.info("[app] Validating XML against XSD schema")
+            # Parse XSD content securely
+            xsd_root = DefusedET.fromstring(xsd_content)
+            xml_schema = ET.XMLSchema(xsd_root)
+            if not xml_schema.validate(root):
+                logger.warning(f"[app] XML validation failed against XSD schema")
+                # Optionally, raise an error or log details
+                # xml_schema.assertValid(root)
+        
+        # Rest of the function remains the same
+        text_content = []
+
+        def process_element(element, path=""):
+            """Recursively process XML elements."""
+            current_path = f"{path}/{element.tag}" if path else element.tag
+
+            # Add element text if present
+            if element.text and element.text.strip():
+                text_content.append(f"{current_path}: {element.text.strip()}")
+
+            # Process attributes
+            for key, value in element.attrib.items():
+                text_content.append(f"{current_path}[@{key}]: {value}")
+
+            # Process child elements
+            for child in element:
+                process_element(child, current_path)
+
+        process_element(root)
+        return '\n'.join(text_content)
+
+    except ET.ParseError as e:
+        logger.error(f"[app] XML parsing error: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"[app] Error processing XML content: {str(e)}")
+        raise
+
+def process_json_content(data):
+    """Process JSON data and convert it to text."""
+    if isinstance(data, dict):
+        return '\n'.join(f"{k}: {v}" for k, v in data.items() if v)
+    elif isinstance(data, list):
+        return '\n'.join(str(item) for item in data if item)
+    else:
+        return str(data)
+
+# Add this route to handle batch processing of disease definitions
+@app.route('/generate-multiple-disease-definitions', methods=['POST'])
+def generate_multiple_disease_definitions():
+    """
+    Generate structured disease definitions for multiple diseases concurrently.
+    Expected payload: {"diseaseNames": ["disease1", "disease2", ...]}
+    """
+    try:
+        data = request.json
+        disease_names = data.get('diseaseNames', [])
+        
+        if not disease_names:
+            logger.error("[app] No disease names provided")
+            return jsonify({
+                "status": "error",
+                "message": "No disease names provided"
+            }), 400
+
+        # Initialize the index with proper error handling
+        try:
+            # Fixed path for the index
+            index_key = "00000/11111/index.pkl"
+            
+            # Create a temporary directory to store the downloaded index
+            with tempfile.TemporaryDirectory() as temp_dir:
+                local_index_path = os.path.join(temp_dir, 'index.pkl')
+                
+                try:
+                    # Download index from S3
+                    logger.info(f"[app] Downloading index from S3: {index_key}")
+                    s3_client.download_file(
+                        AWS_UPLOAD_BUCKET_NAME,
+                        index_key,
+                        local_index_path
+                    )
+                    
+                    # Load the index
+                    with open(local_index_path, 'rb') as f:
+                        global index
+                        index = pickle.load(f)
+                        
+                    logger.info("[app] Successfully loaded index from S3")
+                    
+                except Exception as e:
+                    logger.error(f"[app] Error loading index from S3: {str(e)}")
+                    raise ValueError(f"Failed to load index: {str(e)}")
+
+                if index is None:
+                    raise ValueError("Index is None after loading")
+
+                # Process diseases concurrently
+                results = {}
+                errors = {}
+                
+                def process_disease(disease_name: str) -> tuple[str, dict]:
+                    """Process a single disease definition."""
+                    try:
+                        disease_json = query_index_for_disease(index, disease_name)
+                        disease_data = Disease.parse_raw(disease_json)
+                        return disease_name, {"status": "success", "data": disease_data.dict()}
+                    except Exception as e:
+                        logger.error(f"[app] Error processing disease {disease_name}: {str(e)}")
+                        return disease_name, {"status": "error", "message": str(e)}
+
+                # Use ThreadPoolExecutor for concurrent processing
+                with ThreadPoolExecutor(max_workers=min(10, len(disease_names))) as executor:
+                    future_to_disease = {
+                        executor.submit(process_disease, name): name 
+                        for name in disease_names
+                    }
+                    
+                    for future in as_completed(future_to_disease):
+                        disease_name = future_to_disease[future]
+                        try:
+                            name, result = future.result()
+                            if result["status"] == "success":
+                                results[name] = result["data"]
+                            else:
+                                errors[name] = result["message"]
+                        except Exception as e:
+                            errors[disease_name] = str(e)
+
+                # Prepare response
+                response = {
+                    "status": "success" if results else "error",
+                    "successful_definitions": results,
+                    "failed_definitions": errors,
+                    "summary": {
+                        "total": len(disease_names),
+                        "successful": len(results),
+                        "failed": len(errors)
+                    }
+                }
+
+                return jsonify(response), 200 if results else 500
+                
+        except Exception as e:
+            logger.error(f"[app] Error initializing index: {str(e)}")
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to initialize index: {str(e)}"
+            }), 500
+
+    except Exception as e:
+        logger.error(f"[app] Error in generate_multiple_disease_definitions: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 if __name__ == "__main__":
     # Run the Flask app on port 5001
