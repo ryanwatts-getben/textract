@@ -12,7 +12,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 from pathlib import Path
-
 # Third-party imports
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -22,7 +21,6 @@ from dotenv import load_dotenv
 import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import ParseError
 from defusedxml import ElementTree as DefusedET  # type: ignore
-
 # LlamaIndex imports
 from llama_index.core import (
     VectorStoreIndex,
@@ -31,13 +29,9 @@ from llama_index.core import (
 )
 from pypdf import PdfReader
 from llama_index.llms.anthropic import Anthropic
-
 # Local imports
 from rag import create_index
-from disease_definition_generator import query_index_for_disease, Disease
-
-
-
+from disease_definition_generator import generate_multiple_definitions
 # from functools import partial
 # from pdfplumber  # type: ignore
 # from pdfminer.high_level import extract_text as pdfminer_extract_text  # type: ignore
@@ -633,49 +627,6 @@ def sanitize_filename(filename):
 # You might need to adjust this depending on your application flow
 index = None  # Placeholder for the index variable
 
-@app.route('/generate-disease-definitions', methods=['POST'])
-def generate_disease_definitions():
-    """
-    Generate structured disease definitions based on the provided disease name.
-    Expected payload: {"diseaseName": "name_of_the_disease"}
-    """
-    try:
-        data = request.json
-        disease_name = data.get('diseaseName')
-        
-        if not disease_name:
-            logger.error(f"[app] Missing 'diseaseName' in request data")
-            return jsonify({
-                "status": "error",
-                "message": "Missing 'diseaseName' in request data"
-            }), 400
-        
-        # Ensure the index is initialized
-        global index
-        if index is None:
-            # Load or create the index
-            # For example:
-            # index, _ = create_or_update_index(user_id, project_id, force_refresh=False)
-            # You'll need to adjust based on how your index is managed
-            pass
-        
-        # Generate structured disease definition using the query function
-        disease_json = query_index_for_disease(index, disease_name)
-        disease_data = Disease.parse_raw(disease_json)
-        
-        # Return the disease data as JSON
-        return jsonify({
-            "status": "success",
-            "data": disease_data.dict()
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"[app] Error in generate_disease_definitions: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
 def parse_xml_content(xml_content: str, xsd_content: Optional[str] = None) -> str:
     """
     Parse XML content and optionally validate against XSD schema.
@@ -733,116 +684,49 @@ def process_json_content(data):
     else:
         return str(data)
 
-# Add this route to handle batch processing of disease definitions
 @app.route('/generate-multiple-disease-definitions', methods=['POST'])
-def generate_multiple_disease_definitions():
+def generate_definitions():
     """
-    Generate structured disease definitions for multiple diseases concurrently.
-    Expected payload: {"diseaseNames": ["disease1", "disease2", ...]}
+    Endpoint to generate multiple disease definitions.
+    Expects JSON payload: {"diseaseNames": ["disease1", "disease2", ...]}
     """
     try:
-        data = request.json
-        disease_names = data.get('diseaseNames', [])
+        logger.info("[app] Received request to generate disease definitions")
+        # Validate request
+        request_data = request.get_json()
+        logger.info(f"[app] Request data received: {request_data}")
         
-        if not disease_names:
-            logger.error("[app] No disease names provided")
+        if not request_data or 'diseaseNames' not in request_data:
+            logger.warning("[app] Invalid request: missing diseaseNames")
             return jsonify({
-                "status": "error",
-                "message": "No disease names provided"
+                'error': 'Invalid request. Expected {"diseaseNames": ["disease1", "disease2", ...]}'
             }), 400
 
-        # Initialize the index with proper error handling
-        try:
-            # Fixed path for the index
-            index_key = "00000/11111/index.pkl"
-            
-            # Create a temporary directory to store the downloaded index
-            with tempfile.TemporaryDirectory() as temp_dir:
-                local_index_path = os.path.join(temp_dir, 'index.pkl')
-                
-                try:
-                    # Download index from S3
-                    logger.info(f"[app] Downloading index from S3: {index_key}")
-                    s3_client.download_file(
-                        AWS_UPLOAD_BUCKET_NAME,
-                        index_key,
-                        local_index_path
-                    )
-                    
-                    # Load the index
-                    with open(local_index_path, 'rb') as f:
-                        global index
-                        index = pickle.load(f)
-                        
-                    logger.info("[app] Successfully loaded index from S3")
-                    
-                except Exception as e:
-                    logger.error(f"[app] Error loading index from S3: {str(e)}")
-                    raise ValueError(f"Failed to load index: {str(e)}")
+        disease_names = request_data['diseaseNames']
+        
+        # Generate definitions using the imported function
+        results = generate_multiple_definitions(disease_names)
+        
+        logger.info("[app] Definitions generated successfully")
+        return jsonify(results)
 
-                if index is None:
-                    raise ValueError("Index is None after loading")
-
-                # Process diseases concurrently
-                results = {}
-                errors = {}
-                
-                def process_disease(disease_name: str) -> tuple[str, dict]:
-                    """Process a single disease definition."""
-                    try:
-                        disease_json = query_index_for_disease(index, disease_name)
-                        disease_data = Disease.parse_raw(disease_json)
-                        return disease_name, {"status": "success", "data": disease_data.dict()}
-                    except Exception as e:
-                        logger.error(f"[app] Error processing disease {disease_name}: {str(e)}")
-                        return disease_name, {"status": "error", "message": str(e)}
-
-                # Use ThreadPoolExecutor for concurrent processing
-                with ThreadPoolExecutor(max_workers=min(10, len(disease_names))) as executor:
-                    future_to_disease = {
-                        executor.submit(process_disease, name): name 
-                        for name in disease_names
-                    }
-                    
-                    for future in as_completed(future_to_disease):
-                        disease_name = future_to_disease[future]
-                        try:
-                            name, result = future.result()
-                            if result["status"] == "success":
-                                results[name] = result["data"]
-                            else:
-                                errors[name] = result["message"]
-                        except Exception as e:
-                            errors[disease_name] = str(e)
-
-                # Prepare response
-                response = {
-                    "status": "success" if results else "error",
-                    "successful_definitions": results,
-                    "failed_definitions": errors,
-                    "summary": {
-                        "total": len(disease_names),
-                        "successful": len(results),
-                        "failed": len(errors)
-                    }
-                }
-
-                return jsonify(response), 200 if results else 500
-                
-        except Exception as e:
-            logger.error(f"[app] Error initializing index: {str(e)}")
-            return jsonify({
-                "status": "error",
-                "message": f"Failed to initialize index: {str(e)}"
-            }), 500
-
+    except ValueError as ve:
+        logger.error(f"[app] Validation error: {str(ve)}")
+        return jsonify({'error': str(ve)}), 400
     except Exception as e:
-        logger.error(f"[app] Error in generate_multiple_disease_definitions: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
+        logger.error(f"[app] Server error: {str(e)}")
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
-if __name__ == "__main__":
-    # Run the Flask app on port 5001
-    app.run(host='0.0.0.0', port=5001, debug=True)
+@app.errorhandler(404)
+def not_found(error):
+    logger.warning(f"[app] 404 Not Found: {request.path}")
+    return jsonify({'error': 'Not found'}), 404
+
+@app.errorhandler(500)
+def server_error(error):
+    logger.error(f"[app] 500 Internal Server Error: {error}")
+    return jsonify({'error': 'Internal server error'}), 500
+
+if __name__ == '__main__':
+    logger.info("[app] Starting Flask app on 0.0.0.0:5001")
+    app.run(host='0.0.0.0', port=5001)
