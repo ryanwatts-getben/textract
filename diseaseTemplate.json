@@ -1,0 +1,196 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Disease Definition",
+    "description": "A comprehensive medical disease definition with associated metadata",
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "The official medical name of the disease"
+        },
+        "icd10": {
+            "type": "string",
+            "description": "The valid ICD-10 code for the disease",
+            "pattern": "^[A-Z][0-9][0-9A-Z](\\.?[0-9]{0,2})?$"
+        },
+        "isGlobal": {
+            "type": "boolean",
+            "description": "Indicates if the disease is globally recognized and documented"
+        },
+        "cptCodes": {
+            "type": "array",
+            "description": "List of valid CPT codes for procedures related to this disease",
+            "items": {
+                "type": "string",
+                "pattern": "^[0-9]{5}$"
+            }
+        },
+        "symptoms": {
+            "type": "array",
+            "description": "List of symptoms associated with the disease",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The medical term for the symptom"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            }
+        },
+        "labResults": {
+            "type": "array",
+            "description": "List of laboratory tests relevant for diagnosis",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the laboratory test"
+                    },
+                    "range": {
+                        "type": "string",
+                        "description": "The normal range or expected values for the test"
+                    }
+                },
+                "required": [
+                    "name",
+                    "range"
+                ]
+            }
+        },
+        "diagnosticProcedures": {
+            "type": "array",
+            "description": "List of diagnostic procedures used to identify the disease",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the diagnostic procedure"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            }
+        },
+        "riskFactors": {
+            "type": "array",
+            "description": "List of factors that increase the risk of developing the disease",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the risk factor"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            }
+        },
+        "scoringModel": {
+            "type": "object",
+            "description": "Weighted scoring model for disease probability assessment",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of the scoring model"
+                },
+                "symptomWeight": {
+                    "type": "number",
+                    "description": "Weight assigned to symptoms in the scoring model",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "labResultWeight": {
+                    "type": "number",
+                    "description": "Weight assigned to lab results in the scoring model",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "diagnosticProcedureWeight": {
+                    "type": "number",
+                    "description": "Weight assigned to diagnostic procedures in the scoring model",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "riskFactorWeight": {
+                    "type": "number",
+                    "description": "Weight assigned to risk factors in the scoring model",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "confidenceThreshold": {
+                    "type": "number",
+                    "description": "Minimum confidence score required for positive identification",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "isGlobal": {
+                    "type": "boolean",
+                    "description": "Indicates if the scoring model is globally validated"
+                }
+            },
+            "required": [
+                "name",
+                "symptomWeight",
+                "labResultWeight",
+                "diagnosticProcedureWeight",
+                "riskFactorWeight",
+                "confidenceThreshold",
+                "isGlobal"
+            ]
+        },
+        "relationships": {
+            "type": "array",
+            "description": "List of relationships with other diseases",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "relatedDisease": {
+                        "type": "string",
+                        "description": "The name of the related disease"
+                    },
+                    "relationType": {
+                        "type": "string",
+                        "enum": [
+                            "HIGHLY_RELATED",
+                            "COMORBIDITY",
+                            "SYMPTOM_INDICATOR",
+                            "HEREDITARY",
+                            "OTHER"
+                        ],
+                        "description": "The type of relationship between the diseases"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Detailed description of the relationship"
+                    }
+                },
+                "required": [
+                    "relatedDisease",
+                    "relationType",
+                    "description"
+                ]
+            }
+        }
+    },
+    "required": [
+        "name",
+        "icd10",
+        "isGlobal",
+        "cptCodes",
+        "symptoms",
+        "labResults",
+        "diagnosticProcedures",
+        "riskFactors",
+        "scoringModel",
+        "relationships"
+    ]
+}

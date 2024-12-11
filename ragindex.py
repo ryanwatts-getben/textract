@@ -15,7 +15,6 @@ from botocore.exceptions import ClientError
 import time
 from dotenv import load_dotenv
 import json
-import PyPDF2
 import io
 
 # Configure logging
