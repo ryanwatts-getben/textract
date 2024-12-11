@@ -68,68 +68,274 @@ def get_embedding_model(model_name: str = "all-MiniLM-L6-v2"):
 
 def query_index_for_disease(index: VectorStoreIndex, disease_name: str) -> str:
     try:
+        # Initialize the output parser with the Disease Pydantic model
         parser = PydanticOutputParser(Disease)
-        disease_template = {"name":"DISEASE_NAME","icd10":"ICD10_CODE","isGlobal":True,"cptCodes":["CPT_CODE_1","CPT_CODE_2"],"symptoms":[{"name":"SYMPTOM_1"},{"name":"SYMPTOM_2"}],"labResults":[{"name":"LAB_TEST_1","range":"RANGE_1"},{"name":"LAB_TEST_2","range":"RANGE_2"}],"diagnosticProcedures":[{"name":"PROCEDURE_1"},{"name":"PROCEDURE_2"}],"riskFactors":[{"name":"RISK_FACTOR_1"},{"name":"RISK_FACTOR_2"}],"scoringModel":{"name":"SCORING_MODEL","symptomWeight":0.3,"labResultWeight":0.3,"diagnosticProcedureWeight":0.2,"riskFactorWeight":0.2,"confidenceThreshold":0.7,"isGlobal":True},"relationships":[{"relatedDisease":"RELATED_DISEASE_1","relationType":"HIGHLY_RELATED","description":"RELATIONSHIP_DESCRIPTION_1"}]}
-        format_instructions = json.dumps(disease_template)
-
-        # Initialize variables for handling continued responses
-        full_response = ""
-        messages = []
-        MAX_ITERATIONS = 5
-        iteration_count = 0
-
-        while True:
-            iteration_count += 1
-            if iteration_count > MAX_ITERATIONS:
-                logger.error("[disease_definition_generator] Exceeded maximum number of iterations")
-                raise ValueError("Exceeded maximum number of iterations for response generation")
-
-            # Configure query engine with appropriate template
-            query_engine = index.as_query_engine(
-                llm=Anthropic(
-                    model="claude-3-5-sonnet-20241022",
-                    api_key=os.getenv('ANTHROPIC_API_KEY')
-                ),
-                embed_model=get_embedding_model(),
-                prompt_template=f"""You are a medical knowledge base assistant. Generate a comprehensive disease definition in JSON format.
-
-Requirements:
-- The response must be valid JSON that matches the following structure exactly:
-{format_instructions}
-- Generate a structured disease definition for: {disease_name}
-- Response must be valid JSON that can be parsed into the specified structure.""" if not messages else "Continue exactly where you left off, without repeating anything or starting over.",
-                structured_answer_filtering=True,
-                output_parser=parser,
-                system_prompt=f"""You are a medical data assistant specialized in generating structured disease definitions.
-Your responses must always be valid JSON that matches the required structure exactly.
-Do not include any explanatory text, only return the JSON object. Do not preamble. JSON object = {format_instructions}""",
-                similarity_top_k=5,
-                response_kwargs={
-                    "temperature": 0.0,
-                    "max_tokens": 8192,
+        
+        # Load the disease schema as JSON
+        disease_template = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Disease Definition",
+    "description": "A comprehensive medical disease definition with associated metadata",
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "The official medical name of the disease"
+        },
+        "icd10": {
+            "type": "string",
+            "description": "The valid ICD-10 code for the disease",
+            "pattern": "^[A-Z][0-9][0-9A-Z](\\.?[0-9]{0,2})?$"
+        },
+        "isGlobal": {
+            "type": "boolean",
+            "description": "Indicates if the disease is globally recognized and documented"
+        },
+        "cptCodes": {
+            "type": "array",
+            "description": "List of valid CPT codes for procedures related to this disease",
+            "items": {
+                "type": "string",
+                "pattern": "^[0-9]{5}$"
+            }
+        },
+        "symptoms": {
+            "type": "array",
+            "description": "List of symptoms associated with the disease",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The medical term for the symptom"
+                    }
                 },
-                verbose=False
-            )
+                "required": [
+                    "name"
+                ]
+            }
+        },
+        "labResults": {
+            "type": "array",
+            "description": "List of laboratory tests relevant for diagnosis",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the laboratory test"
+                    },
+                    "range": {
+                        "type": "string",
+                        "description": "The normal range or expected values for the test"
+                    }
+                },
+                "required": [
+                    "name",
+                    "range"
+                ]
+            }
+        },
+        "diagnosticProcedures": {
+            "type": "array",
+            "description": "List of diagnostic procedures used to identify the disease",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the diagnostic procedure"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            }
+        },
+        "riskFactors": {
+            "type": "array",
+            "description": "List of factors that increase the risk of developing the disease",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the risk factor"
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            }
+        },
+        "scoringModel": {
+            "type": "object",
+            "description": "Weighted scoring model for disease probability assessment",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of the scoring model"
+                },
+                "symptomWeight": {
+                    "type": "number",
+                    "description": "Weight assigned to symptoms in the scoring model",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "labResultWeight": {
+                    "type": "number",
+                    "description": "Weight assigned to lab results in the scoring model",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "diagnosticProcedureWeight": {
+                    "type": "number",
+                    "description": "Weight assigned to diagnostic procedures in the scoring model",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "riskFactorWeight": {
+                    "type": "number",
+                    "description": "Weight assigned to risk factors in the scoring model",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "confidenceThreshold": {
+                    "type": "number",
+                    "description": "Minimum confidence score required for positive identification",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "isGlobal": {
+                    "type": "boolean",
+                    "description": "Indicates if the scoring model is globally validated"
+                }
+            },
+            "required": [
+                "name",
+                "symptomWeight",
+                "labResultWeight",
+                "diagnosticProcedureWeight",
+                "riskFactorWeight",
+                "confidenceThreshold",
+                "isGlobal"
+            ]
+        },
+        "relationships": {
+            "type": "array",
+            "description": "List of relationships with other diseases",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "relatedDisease": {
+                        "type": "string",
+                        "description": "The name of the related disease"
+                    },
+                    "relationType": {
+                        "type": "string",
+                        "enum": [
+                            "HIGHLY_RELATED",
+                            "COMORBIDITY",
+                            "SYMPTOM_INDICATOR",
+                            "HEREDITARY",
+                            "OTHER"
+                        ],
+                        "description": "The type of relationship between the diseases"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Detailed description of the relationship"
+                    }
+                },
+                "required": [
+                    "relatedDisease",
+                    "relationType",
+                    "description"
+                ]
+            }
+        }
+    },
+    "required": [
+        "name",
+        "icd10",
+        "isGlobal",
+        "cptCodes",
+        "symptoms",
+        "labResults",
+        "diagnosticProcedures",
+        "riskFactors",
+        "scoringModel",
+        "relationships"
+    ]
+}
+        format_instructions = json.dumps(disease_template)
+        
+        # Define the system prompt with explicit instructions
+        system_prompt = f"""
+You are a medical data assistant that returns ONLY JSON. You have one task:
 
-            # Execute query
-            response = query_engine.query(disease_name)
-            current_response = response.response
-            logger.info(f"[disease_definition_generator] Current response: {current_response}")
-            # Add to full response
-            full_response += current_response
-            
-            # Check if we need to continue
-            stop_reason = getattr(response, 'stop_reason', None)
-            logger.info(f"[disease_definition_generator] Stop reason: {stop_reason}")
-            
-            if stop_reason != 'max_tokens':
-                break
-                
-            # Add to messages for context in next iteration
-            messages.append({"role": "assistant", "content": current_response})
-            logger.info(f"[disease_definition_generator] Continuing response due to max_tokens...")
+Output EXACTLY ONE JSON object that matches the provided schema. No explanation, no text outside the JSON object, no apologies, no markdown formatting. If uncertain, output an empty JSON object {{}}. The JSON must strictly conform to the schema below.
 
-        # Attempt to parse the complete response
+SCHEMA:
+{format_instructions}
+
+The disease: {disease_name}
+
+EXAMPLE OF A VALID JSON RESPONSE (for a hypothetical disease):
+
+{{
+  "name": "Hypothetical Disease",
+  "icd10": "A00",
+  "isGlobal": true,
+  "cptCodes": ["12345"],
+  "symptoms": [{{ "name": "High fever" }}],
+  "labResults": [{{ "name": "Test X", "range": "50-100" }}],
+  "diagnosticProcedures": [{{ "name": "MRI Scan" }}],
+  "riskFactors": [{{ "name": "Smoking" }}],
+  "scoringModel": {{
+    "name": "Hypothetical Model",
+    "symptomWeight": 0.5,
+    "labResultWeight": 0.5,
+    "diagnosticProcedureWeight": 0.5,
+    "riskFactorWeight": 0.5,
+    "confidenceThreshold": 0.5,
+    "isGlobal": true
+  }},
+  "relationships": [{{
+    "relatedDisease": "Another Disease",
+    "relationType": "COMORBIDITY",
+    "description": "Often occurs together"
+  }}]
+}}
+
+DO NOT USE THIS EXAMPLE TEXT OUTSIDE OF THIS EXAMPLE. NOW PRODUCE YOUR OWN JSON FOR THE GIVEN DISEASE.
+"""
+
+        # Configure the query engine without a prompt template
+        query_engine = index.as_query_engine(
+            llm=Anthropic(
+                model="claude-3-5-sonnet-20241022",
+                api_key=os.getenv('ANTHROPIC_API_KEY')
+            ),
+            embed_model=get_embedding_model(),
+            system_prompt=system_prompt,
+            output_parser=parser,
+            structured_answer_filtering=True,
+            similarity_top_k=5,
+            response_kwargs={
+                "temperature": 0.0,
+                "max_tokens": 8192,  # Adjust if needed
+            },
+            verbose=False
+        )
+        
+        # Execute the query with an empty string since the instructions are in the system prompt
+        response = query_engine.query("")
+
+        # Get the full response
+        full_response = response.response
+
+        # Attempt to parse the JSON response
         try:
             disease_data = Disease.model_validate_json(full_response)
             return disease_data.model_dump_json()
