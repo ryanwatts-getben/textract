@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 lambda/
+BioBERT-mnli-snli-scinli-scitail-mednli-stsb/*
+BioBERT-mnli-snli-scinli-scitail-mednli-stsb/1_Pooling
+BioBERT-mnli-snli-scinli-scitail-mednli-stsb/eval
 lambda2/
 # C extensions
 *.so
