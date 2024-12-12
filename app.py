@@ -15,6 +15,7 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+import multiprocessing
 
 
 # Third-party imports
@@ -233,7 +234,7 @@ def process_single_document(args):
         logger.error(f'[app] Error processing file {key}: {e}')
         return None
 
-def create_or_update_index(user_id: str, project_id: str, force_refresh: bool = False, max_workers=10) -> tuple[VectorStoreIndex, str]:
+def create_or_update_index(user_id: str, project_id: str, force_refresh: bool = False, max_workers=50) -> tuple[VectorStoreIndex, str]:
     """
     Create or update index for the given user and project.
     Returns tuple of (index, status_message)
@@ -735,5 +736,6 @@ def server_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
+    multiprocessing.freeze_support()
     logger.info("[app] Starting Flask app on 0.0.0.0:5001")
     app.run(host='0.0.0.0', port=5001)

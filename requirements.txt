@@ -22,3 +22,5 @@ pdfminer.six
 defusedxml
 langchain
 langchain-community
+transformers>=4.47.0
+sentence-transformers>=3.3.1
