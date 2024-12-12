@@ -35,7 +35,7 @@ def preprocess_document(document_text: str) -> str:
     logger.debug(f"[preprocess_document] Processed document length: {len(processed_text)}")
     return processed_text
 
-def get_embedding_model(model_name: str = "all-MiniLM-L6-v2"):
+def get_embedding_model(model_name: str = "BioBERT-mnli-snli-scinli-scitail-mednli-stsb"):
     """Initialize embedding model with proper device configuration."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"[get_embedding_model] Using device: {device} for embeddings")

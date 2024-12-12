@@ -4,6 +4,7 @@ import json
 import boto3
 import tempfile
 import pickle
+from tqdm import tqdm
 
 from flask import request, jsonify
 from pydantic import BaseModel, Field
@@ -20,7 +21,8 @@ from llama_index.core import (
     Settings
 )
 from llama_index.embeddings.langchain import LangchainEmbedding
-from langchain.embeddings.huggingface import HuggingFaceEmbeddings #type: ignore
+from langchain_huggingface import HuggingFaceEmbeddings
+from sentence_transformers import SentenceTransformer
 from llama_index.llms.anthropic import Anthropic
 import torch
 
@@ -56,30 +58,88 @@ class Prognosis(BaseModel):
 
 class DiseaseDefinition(BaseModel):
     name: str
-    alternateNames: Optional[List[str]] = []
-    icd10: Optional[str] = None
-    isGlobal: Optional[bool] = None
-    symptoms: List[Symptom]
-    labResults: Optional[List[LabResult]] = []
-    diagnosticProcedures: List[DiagnosticProcedure]
-    treatments: Optional[List[Treatment]] = []
-    prognosis: Optional[Prognosis] = None
-
-def get_embedding_model(model_name: str = "all-MiniLM-L6-v2"):
-    """Initialize embedding model with proper device configuration."""
+    icd10: List[str]
+    description: str
+    symptoms: List[str]
+    commonTests: List[str]
+    treatments: List[str]
+    complications: List[str]
+    relatedConditions: List[str]
+    
+# Define the get_embedding_model function before it's used
+def get_embedding_model(model_name: str = "BioBERT-mnli-snli-scinli-scitail-mednli-stsb"):
+    """Initialize the embedding model with proper device configuration."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"[rag] Using device: {device} for embeddings")
+    logger.info(f"[disease_definition_generator] Attempting to load embedding model: {model_name} on {device}")
+    try:
+        # Initialize HuggingFaceEmbeddings
+        huggingface_embeddings = HuggingFaceEmbeddings(
+            model_name=model_name,
+            model_kwargs={'device': device},
+            encode_kwargs={'normalize_embeddings': True, 'batch_size': 32}
+        )
 
-    # Initialize HuggingFace embeddings with updated import
-    huggingface_embeddings = HuggingFaceEmbeddings(
-        model_name=model_name,
-        model_kwargs={'device': device}
-    )
+        # Get the embedding dimension
+        embedding_dimension = huggingface_embeddings.model.get_sentence_embedding_dimension()
 
-    # Wrap with LangchainEmbedding for compatibility with LlamaIndex
-    return LangchainEmbedding(huggingface_embeddings)
+        # Wrap with LangchainEmbedding
+        embedding_model = LangchainEmbedding(huggingface_embeddings)
+        # Attach attributes for easy access
+        embedding_model.model_name = model_name
+        embedding_model.embedding_dimension = embedding_dimension
+
+        logger.info(f"[disease_definition_generator] Successfully loaded embedding model: {model_name}")
+        logger.info(f"[disease_definition_generator] Embedding dimension: {embedding_dimension}")
+
+        return embedding_model
+    except Exception as e:
+        logger.error(f"[disease_definition_generator] Error loading model {model_name}: {str(e)}")
+        raise
+
+# Singleton class for the Embedding Model
+class EmbeddingModelSingleton:
+    _instance = None
+
+    @staticmethod
+    def get_instance():
+        if EmbeddingModelSingleton._instance is None:
+            # Initialize the embedding model using the defined function
+            EmbeddingModelSingleton._instance = get_embedding_model()
+        return EmbeddingModelSingleton._instance
+
+# Initialize Singleton Embedding Model
+embedding_model_instance = EmbeddingModelSingleton.get_instance()
+logger.info(f"[disease_definition_generator] Using Singleton embedding model: {embedding_model_instance.model_name}")
+
+class S3ProgressPercentage(object):
+    def __init__(self, filename):
+        self._filename = filename
+        self._size = float(os.path.getsize(filename))
+        self._seen_so_far = 0
+        self._pbar = tqdm(total=self._size, unit='B', unit_scale=True, desc=f"[disease_definition_generator] Uploading {os.path.basename(filename)}")
+
+    def __call__(self, bytes_amount):
+        self._seen_so_far += bytes_amount
+        self._pbar.update(bytes_amount)
+        if self._seen_so_far >= self._size:
+            self._pbar.close()
+
 class DiseaseDefinitionEngine:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            logger.info("[disease_definition_generator] Creating new DiseaseDefinitionEngine instance")
+            cls._instance = super(DiseaseDefinitionEngine, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self):
+        # Only initialize once
+        if self._initialized:
+            logger.debug("[disease_definition_generator] Using existing DiseaseDefinitionEngine instance")
+            return
+            
         logger.info("[disease_definition_generator] Initializing DiseaseDefinitionEngine...")
 
         # Load environment variables
@@ -90,11 +150,14 @@ class DiseaseDefinitionEngine:
 
         # Initialize Hugging Face embedding model using Langchain
         self.embed_model = get_embedding_model()
-        logger.info("[disease_definition_generator] Embedding model initialized with all-MiniLM-L6-v2")
+        logger.info(f"[disease_definition_generator] Embedding model initialized with {self.embed_model.model_name}")
+
+        embedding_dimension = self.embed_model.embedding_dimension
+        logger.info(f"[disease_definition_generator] Embedding dimension: {embedding_dimension}")
 
         # Initialize Anthropic LLM
         self.llm = Anthropic(
-            api_key=self.ANTHROPIC_API_KEY,  # Changed from ANTHROPIC_API_KEY parameter
+            api_key=self.ANTHROPIC_API_KEY,
             model="claude-3-5-sonnet-20241022",
             temperature=0,
             max_tokens=2000
@@ -106,123 +169,113 @@ class DiseaseDefinitionEngine:
         Settings.llm = self.llm
         logger.info("[disease_definition_generator] Global settings configured with embedding model and LLM")
 
-        # Define the prompt template
-        self.prompt_template = PromptTemplate(
-            template=(
-                "Given the disease name '{disease_name}', provide a comprehensive medical definition "
-                "and analysis in JSON format that matches the following structure:\n"
-                "{\n"
-                '  "name": "string",\n'
-                '  "alternateNames": ["string"],\n'
-                '  "icd10": "string",\n'
-                '  "isGlobal": boolean,\n'
-                '  "symptoms": [\n'
-                '    {\n'
-                '      "name": "string",\n'
-                '      "commonality": "VERY_COMMON|COMMON|UNCOMMON|RARE",\n'
-                '      "severity": "MILD|MODERATE|SEVERE|CRITICAL"\n'
-                '    }\n'
-                '  ],\n'
-                '  "labResults": [\n'
-                '    {\n'
-                '      "name": "string",\n'
-                '      "unit": "string",\n'
-                '      "normalRange": "string",\n'
-                '      "significance": "string"\n'
-                '    }\n'
-                '  ],\n'
-                '  "diagnosticProcedures": [\n'
-                '    {\n'
-                '      "name": "string",\n'
-                '      "accuracy": float,\n'
-                '      "invasiveness": "NON_INVASIVE|MINIMALLY_INVASIVE|INVASIVE"\n'
-                '    }\n'
-                '  ],\n'
-                '  "treatments": [\n'
-                '    {\n'
-                '      "name": "string",\n'
-                '      "type": "MEDICATION|SURGERY|THERAPY|LIFESTYLE|OTHER",\n'
-                '      "effectiveness": float\n'
-                '    }\n'
-                '  ],\n'
-                '  "prognosis": {\n'
-                '    "survivalRate": float,\n'
-                '    "chronicityLevel": "ACUTE|SUBACUTE|CHRONIC",\n'
-                '    "qualityOfLifeImpact": "MILD|MODERATE|SEVERE"\n'
-                '  }\n'
-                "}\n\n"
-                "Ensure all information is medically accurate and provide the response in valid JSON format. "
-                "Use the exact structure shown above. For numerical values like accuracy and effectiveness, "
-                "use values between 0 and 1. For survival rate, use a decimal between 0 and 1."
-            )
-        )
-
         # Initialize S3 client and bucket name
         self.s3_client = boto3.client('s3')
         self.AWS_UPLOAD_BUCKET_NAME = "generate-input-f5bef08a-9228-4f8c-a550-56d842b94088"
 
-        # Load the index from S3
+        # Try to load the index from S3
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
                 index_cache_path = os.path.join(temp_dir, 'index.pkl')
                 
-                # Download index from S3
-                logger.info("[disease_definition_generator] Downloading index from S3")
-                self.s3_client.download_file(
-                    self.AWS_UPLOAD_BUCKET_NAME,
-                    "00000/11111/index.pkl",
-                    index_cache_path
-                )
-                
-                # Load the index directly from pickle
-                logger.info("[disease_definition_generator] Loading index from downloaded file")
-                with open(index_cache_path, 'rb') as f:
-                    self.index = pickle.load(f)
-                
-                # Verify the index is loaded with documents
-                if hasattr(self.index, 'docstore') and self.index.docstore.docs:
-                    logger.info("[disease_definition_generator] Index loaded successfully with documents")
-                else:
-                    raise ValueError("Loaded index has no documents")
+                # Try to download index from S3
+                try:    
+                    self.download_index_from_s3(index_cache_path)
+                    
+                    # Load the index directly from pickle
+                    logger.info("[disease_definition_generator] Loading index from downloaded file")
+                    with open(index_cache_path, 'rb') as f:
+                        self.index = pickle.load(f)
+                    
+                    # Verify the index is loaded with documents
+                    if hasattr(self.index, 'docstore') and self.index.docstore.docs:
+                        logger.info("[disease_definition_generator] Index loaded successfully with documents")
+                    else:
+                        logger.warning("[disease_definition_generator] Loaded index has no documents - a new index needs to be created")
+                        self.index = None
+                except ClientError as e:
+                    logger.info(f"[disease_definition_generator] Failed to download index from S3: {str(e)} - a new index needs to be created")
+                    self.index = None
+                except FileNotFoundError:
+                    logger.info("[disease_definition_generator] No existing index found - a new index needs to be created")
+                    self.index = None
+                except Exception as e:
+                    logger.warning(f"[disease_definition_generator] Error loading index: {str(e)} - a new index needs to be created")
+                    self.index = None
 
-        except ClientError as e:
-            logger.error("[disease_definition_generator] Failed to download index from S3: %s", str(e))
-            raise RuntimeError(f"Failed to download index: {str(e)}")
         except Exception as e:
-            logger.error("[disease_definition_generator] Failed to load index: %s", str(e))
-            raise RuntimeError(f"Failed to load index: {str(e)}")
+            logger.error(f"[disease_definition_generator] Unexpected error during initialization: {str(e)}")
+            self.index = None
+
+        if self.index is None:
+            logger.info("[disease_definition_generator] No valid index available - system will need to create a new one")
+
+        # Define the prompt template
+        self.prompt_template = (
+            "Please provide a detailed definition of the disease '{disease_name}' in the following JSON format:\n\n"
+            "{\n"
+            '  "name": "Disease Name",\n'
+            '  "icd10": ["ICD Code 1", "ICD Code 2"],\n'
+            '  "description": "Brief description",\n'
+            '  "symptoms": [\n'
+            '    {\n'
+            '      "name": "Symptom Name",\n'
+            '      "commonality": "RARE|COMMON|VERY_COMMON",\n'
+            '      "severity": "MILD|MODERATE|SEVERE"\n'
+            '    }\n'
+            '  ],\n'
+            '  "commonTests": ["Test 1", "Test 2"],\n'
+            '  "treatments": [\n'
+            '    {\n'
+            '      "name": "Treatment Name",\n'
+            '      "effectiveness": 0.0\n'
+            '    }\n'
+            '  ],\n'
+            '  "complications": ["Complication 1", "Complication 2"],\n'
+            '  "relatedConditions": ["Condition 1", "Condition 2"]\n'
+            '}\n\n'
+            "Ensure that all fields are provided and follow the specified types."
+        )
+
+        self._initialized = True
 
     def generate_definition(self, disease_name: str) -> DiseaseDefinition:
         """Generates a structured definition for a given disease"""
         try:
             logger.info(f"[disease_definition_generator] Generating definition for: {disease_name}")
 
-            # Format the prompt with the disease name
+            # Format the prompt with the disease name first
             formatted_prompt = self.prompt_template.format(disease_name=disease_name)
-            
-            # Create a query engine using the loaded index
-            query_engine = self.index.as_query_engine(
-                llm=Settings.llm,
-                embed_model=Settings.embed_model,
-                response_mode="tree_summarize",
-                similarity_top_k=3,  # Adjust based on requirements
-                verbose=True
-            )
 
-            # Query the index with the formatted prompt
-            response = query_engine.query(formatted_prompt)
+            # Check if index exists
+            if self.index is None:
+                logger.warning("[disease_definition_generator] No index available - using direct LLM query")
+                # Query the LLM directly without using an index
+                response = self.llm.complete(formatted_prompt)
+                response_text = response.text if hasattr(response, 'text') else response.response
+            else:
+                # Use index-based query if available
+                query_engine = self.index.as_query_engine(
+                    llm=Settings.llm,
+                    embed_model=self.embed_model,
+                    response_mode="tree_summarize",
+                    similarity_top_k=3,
+                    verbose=True
+                )
+                response = query_engine.query(formatted_prompt)
+                response_text = response.response
 
             # Parse the response into our Pydantic model
             try:
                 # Attempt to parse the response as JSON
-                definition_dict = json.loads(response.response)
+                definition_dict = json.loads(response_text)
                 definition = DiseaseDefinition(**definition_dict)
                 logger.info(f"[disease_definition_generator] Successfully generated definition for {disease_name}")
                 return definition
 
             except json.JSONDecodeError as e:
                 logger.error(f"[disease_definition_generator] Failed to parse response as JSON: {str(e)}")
-                logger.error(f"[disease_definition_generator] Raw response: {response.response}")
+                logger.error(f"[disease_definition_generator] Raw response: {response_text}")
                 raise ValueError(f"Invalid response format: {str(e)}")
             except Exception as e:
                 logger.error(f"[disease_definition_generator] Failed to create DiseaseDefinition: {str(e)}")
@@ -232,13 +285,66 @@ class DiseaseDefinitionEngine:
             logger.error(f"[disease_definition_generator] Error generating definition for {disease_name}: {str(e)}")
             raise
 
-# Initialize the engine at startup
-try:
-    engine = DiseaseDefinitionEngine()
-    logger.info("[disease_definition_generator] DiseaseDefinitionEngine initialized successfully")
-except Exception as e:
-    logger.error("[disease_definition_generator] Engine initialization failed: %s", str(e))
-    raise
+    def save_index_to_s3(self, index_cache_path: str):
+        """Save index to S3 with progress bar."""
+        try:
+            logger.info("[disease_definition_generator] Uploading index to S3")
+            self.s3_client.upload_file(
+                index_cache_path,
+                self.AWS_UPLOAD_BUCKET_NAME,
+                "11111/22222/index.pkl",
+                Callback=S3ProgressPercentage(index_cache_path)
+            )
+            logger.info("[disease_definition_generator] Successfully uploaded index to S3")
+        except ClientError as e:
+            logger.error(f"[disease_definition_generator] Failed to upload index to S3: {str(e)}")
+            raise
+
+    def download_index_from_s3(self, index_cache_path: str):
+        """Download index from S3 with progress bar."""
+        try:
+            # Get file size first
+            response = self.s3_client.head_object(
+                Bucket=self.AWS_UPLOAD_BUCKET_NAME,
+                Key="11111/22222/index.pkl"
+            )
+            file_size = response['ContentLength']
+
+            # Setup progress bar
+            pbar = tqdm(total=file_size, unit='B', unit_scale=True, 
+                       desc="[disease_definition_generator] Downloading index.pkl")
+
+            # Define callback
+            def download_progress(chunk):
+                pbar.update(chunk)
+
+            # Download with progress
+            self.s3_client.download_file(
+                self.AWS_UPLOAD_BUCKET_NAME,
+                "11111/22222/index.pkl",
+                index_cache_path,
+                Callback=download_progress
+            )
+            pbar.close()
+            logger.info("[disease_definition_generator] Successfully downloaded index from S3")
+        except ClientError as e:
+            logger.error(f"[disease_definition_generator] Failed to download index from S3: {str(e)}")
+            raise
+
+# At the bottom of the file, replace:
+# engine = DiseaseDefinitionEngine()
+
+# With:
+_engine = None
+
+def get_engine():
+    global _engine
+    if _engine is None:
+        _engine = DiseaseDefinitionEngine()
+    return _engine
+
+# Export the singleton instance
+engine = get_engine()
 
 def generate_multiple_definitions(disease_names: List[str]) -> Dict[str, Any]:
     """
@@ -268,10 +374,14 @@ def generate_multiple_definitions(disease_names: List[str]) -> Dict[str, Any]:
             results[disease] = {'error': str(e)}
 
     return results
-
 try:
     engine = DiseaseDefinitionEngine()
     logger.info("[disease_definition_generator] DiseaseDefinitionEngine initialized successfully")
 except Exception as e:
     logger.error("[disease_definition_generator] Engine initialization failed: %s", str(e))
     raise
+
+logger.info(f"[disease_definition_generator] Attributes of self.embed_model: {dir(self.embed_model)}")
+logger.info(f"[disease_definition_generator] Type of self.embed_model: {type(self.embed_model)}")
+
+

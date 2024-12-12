@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 lambda/
 lambda2/
+BioBERT-mnli-snli-scinli-scitail-mednli-stsb/*/**
 # C extensions
 *.so
 index_storage/

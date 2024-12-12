@@ -21,7 +21,7 @@ from llama_index.core import (
     load_index_from_storage,
 )
 from llama_index.embeddings.langchain import LangchainEmbedding
-from langchain.embeddings.huggingface import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,19 +31,27 @@ def preprocess_document(document_text: str) -> str:
     """Preprocess a single document's text."""
     return document_text.lower()
 
-def get_embedding_model(model_name: str = "all-MiniLM-L6-v2"):
+def get_embedding_model(model_name: str = "BioBERT-mnli-snli-scinli-scitail-mednli-stsb"):
     """Initialize embedding model with proper device configuration."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"[rag] Using device: {device} for embeddings")
 
-    # Initialize HuggingFace embeddings with updated import
+    # Initialize HuggingFace embeddings
     huggingface_embeddings = HuggingFaceEmbeddings(
         model_name=model_name,
         model_kwargs={'device': device}
     )
 
     # Wrap with LangchainEmbedding for compatibility with LlamaIndex
-    return LangchainEmbedding(huggingface_embeddings)
+    langchain_embedding = LangchainEmbedding(huggingface_embeddings)
+    langchain_embedding.model_name = model_name  # Attach model name for logging
+
+    # Access the embedding dimension
+    embedding_dimension = huggingface_embeddings.model.get_sentence_embedding_dimension()
+    logger.info(f"[rag] Embedding model initialized with {model_name}")
+    logger.info(f"[rag] Embedding dimension: {embedding_dimension}")
+
+    return langchain_embedding
 
 def process_single_document(doc: Document, chunk_size: int = 512) -> List[Optional[Document]]:
     """Process a single document with chunking."""
@@ -96,9 +104,9 @@ class IndexManager:
     def __init__(self, storage_dir: Optional[str] = None):
         self.indexes: Dict[str, VectorStoreIndex] = {}
         self.batch_size = 100000  # Reduce from 1000000 to 100000
-        self.chunk_size = 512     # Add chunk size control
-        self.max_nodes_per_batch = 500  # Add node limit per batch
-        self.timeout = 300  # 5 minute timeout per batch
+        self.chunk_size = 768     # Add chunk size control
+        self.max_nodes_per_batch = 768  # Add node limit per batch
+        self.timeout = 768  # 5 minute timeout per batch
         self.progress: Dict[str, float] = {}
         self.storage_dir = storage_dir or os.path.join(tempfile.gettempdir(), 'index_storage')
         self.temp_dirs: List[str] = []
@@ -384,29 +392,34 @@ class IndexManager:
         """Get current progress for all index creation tasks."""
         return self.progress.copy()
 
-def create_index(documents: List[Document], max_workers: int = 10, persist: bool = True) -> VectorStoreIndex:
+def create_index(
+    documents: List[Document],
+    max_workers: int = 10,
+    persist: bool = False,
+    load_existing: bool = False
+) -> VectorStoreIndex:
     """Create indexes using the IndexManager with persistence and memory management."""
     with IndexManager() as index_manager:
         try:
             if not documents:
                 raise ValueError("No documents provided to index")
-            
-            # Try to load existing indexes
-            if persist and index_manager.load_indexes():
+
+            # Use load_existing to decide whether to load existing indexes
+            if persist and load_existing and index_manager.load_indexes():
                 logger.info("[rag] Loaded existing indexes")
             else:
                 # Create new indexes
                 index_manager.initialize_indexes(documents)
-                
+
                 if persist:
                     index_manager.save_indexes()
-            
+
             # Merge indexes
             combined_index = index_manager.merge_indexes()
-            
+
             if not combined_index:
                 raise ValueError("No valid indexes created")
-            
+
             return combined_index
 
         except Exception as e:
