@@ -26,7 +26,7 @@ from llama_index.core import (
     PromptTemplate,
     Settings
 )
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from langchain_huggingface import HuggingFaceEmbeddings
 from llama_index.llms.anthropic import Anthropic
 import torch
 from sentence_transformers import SentenceTransformer
@@ -168,7 +168,7 @@ def get_embedding_model(model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-s
 
     try:
         # Initialize HuggingFaceEmbedding from llama_index
-        embedding_model = HuggingFaceEmbedding(
+        embedding_model = HuggingFaceEmbeddings(
             model_name=model_name,
             model_kwargs={'device': device},
             embed_batch_size=32,
