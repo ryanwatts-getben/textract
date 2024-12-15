@@ -16,7 +16,7 @@ import time
 from dotenv import load_dotenv
 import json
 import io
-
+from pypdf import PdfReader
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -312,7 +312,7 @@ def read_file_content(file_path: str) -> str:
         if file_lower.endswith('.pdf'):
             # Handle PDF files
             with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
+                pdf_reader = PdfReader(file)
                 text = ''
                 for page in pdf_reader.pages:
                     text += page.extract_text() + '\n'
