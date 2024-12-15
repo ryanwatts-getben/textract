@@ -13,4 +13,4 @@ I also did this
 
 and 
 
-`pip install PyPDF2`
+`pip install pypdf`

@@ -22,3 +22,8 @@ pdfminer.six
 defusedxml
 langchain
 langchain-community
+python-docx
+defusedxml
+typing-extensions
+requests
+beautifulsoup4
