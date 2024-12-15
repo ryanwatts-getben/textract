@@ -30,6 +30,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from llama_index.llms.anthropic import Anthropic
 import torch
 from sentence_transformers import SentenceTransformer
+from llama_index.embeddings.langchain import LangchainEmbedding
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -167,12 +168,15 @@ def get_embedding_model(model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-s
     logger.info(f"[disease_definition_generator] Attempting to load embedding model: {model_name} on {device}")
 
     try:
-        # Initialize HuggingFaceEmbedding from llama_index
-        embedding_model = HuggingFaceEmbeddings(
+        # Create HuggingFaceEmbeddings from langchain
+        base_embeddings = HuggingFaceEmbeddings(
             model_name=model_name,
-            model_kwargs={'device': device},
-            embed_batch_size=32,
-            normalize=True
+            model_kwargs={'device': device}
+        )
+        
+        # Wrap with LangchainEmbedding for LlamaIndex compatibility
+        embedding_model = LangchainEmbedding(
+            langchain_embeddings=base_embeddings
         )
 
         # Get embedding dimension by generating a test embedding
@@ -182,7 +186,6 @@ def get_embedding_model(model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-s
         logger.info(f"[disease_definition_generator] Successfully loaded embedding model: {model_name}")
         logger.info(f"[disease_definition_generator] Embedding dimension: {embedding_dimension}")
 
-        # Return both the embedding model and the embedding dimension
         return embedding_model, embedding_dimension
 
     except Exception as e:
