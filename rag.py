@@ -12,7 +12,7 @@ from llama_index.llms.anthropic import Anthropic
 from llama_index.core.callbacks import CallbackManager, LlamaDebugHandler
 from llama_index.core.node_parser import SentenceSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+
 from pathlib import Path
 import torch
 import boto3
@@ -57,7 +57,7 @@ def get_embedding_model(model_name: str = EMBEDDING_MODEL_CONFIG["model_name"]):
 
     try:
         # Initialize HuggingFaceEmbedding
-        embedding_model = HuggingFaceEmbedding(
+        embedding_model = HuggingFaceEmbeddings(
             model_name=model_name,
             model_kwargs={'device': device},
             embed_batch_size=EMBEDDING_MODEL_CONFIG["embed_batch_size"],
