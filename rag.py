@@ -56,12 +56,15 @@ def get_embedding_model(model_name: str = EMBEDDING_MODEL_CONFIG["model_name"]):
     logger.info(f"[rag] Attempting to load embedding model: {model_name} on {device}")
 
     try:
-        # Initialize HuggingFaceEmbedding
-        embedding_model = HuggingFaceEmbeddings(
+        # Create HuggingFaceEmbeddings from langchain
+        base_embeddings = HuggingFaceEmbeddings(
             model_name=model_name,
-            model_kwargs={'device': device},
-            embed_batch_size=EMBEDDING_MODEL_CONFIG["embed_batch_size"],
-            normalize=EMBEDDING_MODEL_CONFIG["normalize"]
+            model_kwargs={'device': device}
+        )
+        
+        # Wrap with LangchainEmbedding for LlamaIndex compatibility
+        embedding_model = LangchainEmbedding(
+            langchain_embeddings=base_embeddings
         )
 
         # Get embedding dimension
