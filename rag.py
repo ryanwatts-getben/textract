@@ -2,103 +2,119 @@
 import logging
 import pickle
 import os
-from typing import List, Dict, Optional
-from pathlib import Path
-import gc
-import shutil
 import tempfile
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
-
-# Third-party imports
-import torch
-
-# LlamaIndex imports
-from llama_index.core import (
-    VectorStoreIndex,
-    Document,
-    StorageContext,
-    load_index_from_storage,
-)
+import shutil
+import argparse
+from typing import List, Dict, Optional, Set, Tuple
+from llama_index.core import VectorStoreIndex, Document, Settings
 from llama_index.embeddings.langchain import LangchainEmbedding
-from langchain.embeddings.huggingface import HuggingFaceEmbeddings
+from llama_index.llms.anthropic import Anthropic
+from llama_index.core.callbacks import CallbackManager, LlamaDebugHandler
+from llama_index.core.node_parser import SentenceSplitter
+from langchain_huggingface import HuggingFaceEmbeddings
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from pathlib import Path
+import torch
+import boto3
+from botocore.exceptions import ClientError
+import time
+from dotenv import load_dotenv
+import json
+import io
+import gc
+from pypdf import PdfReader
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Local imports
+from app_rag_disease_config import (
+    LOG_CONFIG,
+    SUPPORTED_EXTENSIONS,
+    EMBEDDING_MODEL_CONFIG,
+    RAGDocumentConfig,
+    VECTOR_STORE_CONFIG,
+    FALLBACK_CONFIG,
+    STORAGE_CONFIG,
+    RAG_ERROR_MESSAGES,
+    CATEGORY_PREFIXES
+)
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=getattr(logging, LOG_CONFIG["level"]),
+    format=LOG_CONFIG["format"]
+)
 logger = logging.getLogger(__name__)
+load_dotenv()
 
 def preprocess_document(document_text: str) -> str:
     """Preprocess a single document's text."""
     return document_text.lower()
 
-def get_embedding_model(model_name: str = "all-MiniLM-L6-v2"):
-    """Initialize embedding model with proper device configuration."""
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"[rag] Using device: {device} for embeddings")
+def get_embedding_model(model_name: str = EMBEDDING_MODEL_CONFIG["model_name"]):
+    """Initialize the embedding model with proper device configuration."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"[rag] Attempting to load embedding model: {model_name} on {device}")
 
-    # Initialize HuggingFace embeddings with updated import
-    huggingface_embeddings = HuggingFaceEmbeddings(
-        model_name=model_name,
-        model_kwargs={'device': device}
-    )
+    try:
+        # Initialize HuggingFaceEmbedding
+        embedding_model = HuggingFaceEmbedding(
+            model_name=model_name,
+            model_kwargs={'device': device},
+            embed_batch_size=EMBEDDING_MODEL_CONFIG["embed_batch_size"],
+            normalize=EMBEDDING_MODEL_CONFIG["normalize"]
+        )
 
-    # Wrap with LangchainEmbedding for compatibility with LlamaIndex
-    return LangchainEmbedding(huggingface_embeddings)
+        # Get embedding dimension
+        test_embedding = embedding_model.get_text_embedding("test")
+        embedding_dimension = len(test_embedding)
 
-def process_single_document(doc: Document, chunk_size: int = 512) -> List[Optional[Document]]:
-    """Process a single document with chunking."""
+        logger.info(f"[rag] Embedding model initialized with {model_name}")
+        logger.info(f"[rag] Embedding dimension: {embedding_dimension}")
+
+        return embedding_model, embedding_dimension
+
+    except Exception as e:
+        logger.error(f"[rag] Error loading model {model_name}: {str(e)}")
+        raise
+
+def process_single_document(doc: Document) -> Optional[Document]:
+    """Process a single document with optimized settings."""
     try:
         if not doc.text.strip():
-            logger.warning("[rag] Skipping empty document")
-            return []
+            return None
             
-        processed_text = preprocess_document(doc.text)
-        if not processed_text:
-            return []
-            
-        # Split into chunks
-        chunks = []
-        words = processed_text.split()
-        current_chunk = []
-        current_length = 0
+        # Process text in chunks for memory efficiency
+        processed_text = ""
+        chunk_size = RAGDocumentConfig.CHUNK_SIZE
+        text = doc.text
         
-        for word in words:
-            if current_length + len(word) > chunk_size:
-                if current_chunk:
-                    chunks.append(' '.join(current_chunk))
-                current_chunk = [word]
-                current_length = len(word)
-            else:
-                current_chunk.append(word)
-                current_length += len(word) + 1  # +1 for space
-                
-        if current_chunk:
-            chunks.append(' '.join(current_chunk))
+        for i in range(0, len(text), chunk_size):
+            chunk = text[i:i + chunk_size]
+            processed_chunk = preprocess_document(chunk)
+            processed_text += processed_chunk
             
-        # Create documents from chunks
-        return [
-            Document(
-                text=chunk,
-                metadata={
-                    **doc.metadata,
-                    'chunk_index': i,
-                    'total_chunks': len(chunks)
-                }
-            )
-            for i, chunk in enumerate(chunks)
-        ]
+        if not processed_text:
+            return None
+            
+        return Document(
+            text=processed_text,
+            metadata={
+                **doc.metadata,
+                'processed_timestamp': time.time()
+            }
+        )
         
     except Exception as e:
-        logger.error(f"[rag] Error processing document: {str(e)}")
-        return []
+        logger.error(RAG_ERROR_MESSAGES["processing_error"].format(file_path=doc.metadata.get('source', 'unknown'), error=str(e)))
+        return None
 
 class IndexManager:
     def __init__(self, storage_dir: Optional[str] = None):
         self.indexes: Dict[str, VectorStoreIndex] = {}
-        self.batch_size = 100000  # Reduce from 1000000 to 100000
-        self.chunk_size = 512     # Add chunk size control
-        self.max_nodes_per_batch = 500  # Add node limit per batch
-        self.timeout = 300  # 5 minute timeout per batch
+        self.batch_size = RAGDocumentConfig.BATCH_SIZE
+        self.chunk_size = RAGDocumentConfig.CHUNK_SIZE_TOKENS
+        self.max_nodes_per_batch = RAGDocumentConfig.MAX_NODES_PER_BATCH
+        self.timeout = RAGDocumentConfig.PROCESSING_TIMEOUT
         self.progress: Dict[str, float] = {}
         self.storage_dir = storage_dir or os.path.join(tempfile.gettempdir(), 'index_storage')
         self.temp_dirs: List[str] = []
@@ -147,187 +163,20 @@ class IndexManager:
                 "categories": list(self.indexes.keys()),
                 "timestamp": time.time()
             }
-            metadata_path = os.path.join(self.storage_dir, "index_metadata.pkl")
+            metadata_path = os.path.join(self.storage_dir, STORAGE_CONFIG["metadata_filename"])
             with open(metadata_path, "wb") as f:
-                pickle.dump(metadata, f)
+                pickle.dump(metadata, f, protocol=STORAGE_CONFIG["pickle_protocol"])
                 
         except Exception as e:
             logger.error(f"[rag] Error saving indexes: {str(e)}")
             raise
-
-    def load_indexes(self) -> bool:
-        """Load indexes from storage if they exist."""
-        try:
-            metadata_path = os.path.join(self.storage_dir, "index_metadata.pkl")
-            if not os.path.exists(metadata_path):
-                return False
-
-            with open(metadata_path, "rb") as f:
-                metadata = pickle.load(f)
-
-            for category in metadata["categories"]:
-                index_path = self._get_index_path(category)
-                if os.path.exists(index_path):
-                    storage_context = StorageContext.from_defaults(persist_dir=index_path)
-                    self.indexes[category] = load_index_from_storage(storage_context)
-                    logger.info(f"[rag] Loaded index for category {category}")
-
-            return True
-        except Exception as e:
-            logger.error(f"[rag] Error loading indexes: {str(e)}")
-            return False
-
-    def merge_indexes(self) -> Optional[VectorStoreIndex]:
-        """Merge all indexes into a single index with memory management."""
-        try:
-            if not self.indexes:
-                return None
-
-            # Create a temporary directory for merging
-            merge_temp_dir = self._create_temp_dir()
-            
-            merged_index = None
-            total_indexes = len(self.indexes)
-            
-            for idx, (category, index) in enumerate(self.indexes.items(), 1):
-                if not index:
-                    continue
-                    
-                logger.info(f"[rag] Merging index {idx}/{total_indexes} from category {category}")
-                
-                if not merged_index:
-                    merged_index = index
-                else:
-                    # Save current state to temporary storage
-                    temp_path = os.path.join(merge_temp_dir, f"temp_merge_{idx}")
-                    os.makedirs(temp_path, exist_ok=True)
-                    
-                    # Merge indexes with memory management
-                    merged_nodes = merged_index.docstore.docs.copy()
-                    merged_nodes.update(index.docstore.docs)
-                    
-                    # Clear memory of individual indexes
-                    del merged_index
-                    del index
-                    gc.collect()
-                    
-                    # Create new merged index
-                    merged_index = VectorStoreIndex.from_documents(
-                        [Document(text=node.text, metadata=node.metadata) 
-                         for node in merged_nodes.values()],
-                        embed_model=get_embedding_model(),
-                        show_progress=True
-                    )
-                    
-                    # Clear memory
-                    del merged_nodes
-                    gc.collect()
-            
-            return merged_index
-            
-        except Exception as e:
-            logger.error(f"[rag] Error merging indexes: {str(e)}")
-            return None
-        finally:
-            self.cleanup()
-
-    def create_index_batch(self, documents: List[Document], category: str) -> Optional[VectorStoreIndex]:
-        """Create index for a batch of documents with memory management."""
-        temp_dir = None
-        try:
-            temp_dir = self._create_temp_dir()
-            total_docs = len(documents)
-            self.progress[category] = 0.0
-            
-            processed_docs = []
-            total_processed = 0
-            
-            # Process documents in smaller batches
-            batch_size = 10  # Process 10 documents at a time
-            
-            for i in range(0, len(documents), batch_size):
-                batch = documents[i:i + batch_size]
-                
-                with ThreadPoolExecutor(max_workers=4) as executor:
-                    future_to_doc = {
-                        executor.submit(
-                            process_single_document, 
-                            doc, 
-                            self.chunk_size
-                        ): doc for doc in batch
-                    }
-                    
-                    for future in as_completed(future_to_doc):
-                        try:
-                            doc_chunks = future.result(timeout=self.timeout)
-                            processed_docs.extend([chunk for chunk in doc_chunks if chunk])
-                            total_processed += 1
-                            self.progress[category] = (total_processed / total_docs) * 100
-                            logger.info(f"[rag] {category} index progress: {self.progress[category]:.2f}%")
-                        except TimeoutError:
-                            logger.warning(f"[rag] Processing timeout for document in {category}")
-                            continue
-                        except Exception as e:
-                            logger.error(f"[rag] Error processing document: {str(e)}")
-                
-                # Create intermediate index every N chunks to manage memory
-                if len(processed_docs) >= self.max_nodes_per_batch:
-                    if category not in self.indexes:
-                        self.indexes[category] = VectorStoreIndex.from_documents(
-                            processed_docs,
-                            embed_model=get_embedding_model(),
-                            show_progress=True
-                        )
-                    else:
-                        # Merge with existing index
-                        temp_index = VectorStoreIndex.from_documents(
-                            processed_docs,
-                            embed_model=get_embedding_model(),
-                            show_progress=True
-                        )
-                        self.indexes[category].merge(temp_index)
-                    
-                    processed_docs = []
-                    gc.collect()
-            
-            # Process any remaining documents
-            if processed_docs:
-                if category not in self.indexes:
-                    self.indexes[category] = VectorStoreIndex.from_documents(
-                        processed_docs,
-                        embed_model=get_embedding_model(),
-                        show_progress=True
-                    )
-                else:
-                    temp_index = VectorStoreIndex.from_documents(
-                        processed_docs,
-                        embed_model=get_embedding_model(),
-                        show_progress=True
-                    )
-                    self.indexes[category].merge(temp_index)
-            
-            return self.indexes.get(category)
-            
-        except Exception as e:
-            logger.error(f"[rag] Failed to create index for {category}: {str(e)}")
-            return None
-        finally:
-            if temp_dir and os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            gc.collect()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.cleanup()
 
     def _get_index_category(self, doc: Document) -> str:
         """Determine index category based on first three letters of filename."""
         try:
             filename = Path(doc.metadata.get('source', '')).name
             prefix = filename[:3].lower()
-            if prefix in ['icd', 'der', 'sct']:
+            if prefix in RAGDocumentConfig.VALID_CATEGORIES:
                 return prefix
             logger.warning(f"[rag] Unknown prefix {prefix} for file {filename}, using 'other'")
             return 'other'
@@ -338,7 +187,7 @@ class IndexManager:
     def _categorize_documents(self, documents: List[Document]) -> Dict[str, List[Document]]:
         """Group documents by their prefix category."""
         categorized: Dict[str, List[Document]] = {
-            'icd': [], 'der': [], 'sct': [], 'other': []
+            category: [] for category in RAGDocumentConfig.VALID_CATEGORIES
         }
         
         for doc in documents:
@@ -347,68 +196,206 @@ class IndexManager:
             
         # Log document distribution
         for category, docs in categorized.items():
-            logger.info(f"[rag] Category {category}: {len(docs)} documents")
+            logger.info(f"[rag] Category {CATEGORY_PREFIXES[category]}: {len(docs)} documents")
             
         return categorized
 
-    def initialize_indexes(self, documents: List[Document]) -> None:
-        """Initialize all indexes with progress monitoring."""
-        try:
-            # Group documents by category
-            categorized_docs = self._categorize_documents(documents)
+def create_index(
+    documents: List[Document],
+    embed_model = None,
+    s3_client = None,
+    bucket_name: str = None,
+    index_cache_key: str = None,
+    temp_dir: str = None,
+    cache_path: str = None,
+    batch_size: int = RAGDocumentConfig.BATCH_SIZE,
+    chunk_size: int = VECTOR_STORE_CONFIG["chunk_size"]
+) -> VectorStoreIndex:
+    """
+    Create a vector store index from documents with S3 caching support.
+    """
+    logger.info(f"[create_index] Starting index creation with {len(documents)} documents.")
+    try:
+        # Use provided embed_model or get a new one
+        if embed_model is None:
+            embed_model = get_embedding_model()
+        
+        # Configure settings for batching and chunking
+        Settings.chunk_size = VECTOR_STORE_CONFIG["chunk_size"]
+        Settings.chunk_overlap = VECTOR_STORE_CONFIG["chunk_overlap"]
+        Settings.embed_model = embed_model
+        Settings.node_parser = SentenceSplitter(
+            chunk_size=VECTOR_STORE_CONFIG["chunk_size"],
+            chunk_overlap=VECTOR_STORE_CONFIG["chunk_overlap"]
+        )
+        Settings.embed_batch_size = VECTOR_STORE_CONFIG["embed_batch_size"]
+        
+        # Process documents in batches
+        total_nodes = []
+        batch_size = min(batch_size, 1000)  # Limit batch size
+        for i in range(0, len(documents), batch_size):
+            batch = documents[i:i + batch_size]
+            logger.info(f'[create_index] Processing batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size}')
             
-            # Create indexes for each category
-            for category, docs in categorized_docs.items():
-                if not docs:
-                    logger.info(f"[rag] Skipping empty category: {category}")
-                    continue
-                    
-                try:
-                    start_time = time.time()
-                    self.indexes[category] = self.create_index_batch(docs, category)
-                    duration = time.time() - start_time
-                    
-                    if self.indexes[category]:
-                        logger.info(f"[rag] Successfully created index for {category} in {duration:.2f}s")
-                    else:
-                        logger.error(f"[rag] Failed to create index for {category}")
-                        
-                except Exception as e:
-                    logger.error(f"[rag] Error creating index for {category}: {str(e)}")
-
-        except Exception as e:
-            logger.error(f"[rag] Error in initialize_indexes: {str(e)}")
-            raise
-
-    def get_progress(self) -> Dict[str, float]:
-        """Get current progress for all index creation tasks."""
-        return self.progress.copy()
-
-def create_index(documents: List[Document], max_workers: int = 10, persist: bool = True) -> VectorStoreIndex:
-    """Create indexes using the IndexManager with persistence and memory management."""
-    with IndexManager() as index_manager:
-        try:
-            if not documents:
-                raise ValueError("No documents provided to index")
+            # Create index for this batch
+            batch_index = VectorStoreIndex.from_documents(
+                documents=batch,
+                show_progress=VECTOR_STORE_CONFIG["show_progress"],
+                callback_manager=CallbackManager([
+                    LlamaDebugHandler(print_trace_on_end=True)
+                ])
+            )
             
-            # Try to load existing indexes
-            if persist and index_manager.load_indexes():
-                logger.info("[rag] Loaded existing indexes")
-            else:
-                # Create new indexes
-                index_manager.initialize_indexes(documents)
+            # Collect nodes from this batch
+            total_nodes.extend(list(batch_index.docstore.docs.values()))
+            
+            # Clear memory
+            del batch_index
+            gc.collect()
+            
+        # Create final index from all nodes
+        logger.info(f'[create_index] Creating final index from {len(total_nodes)} nodes')
+        index = VectorStoreIndex.from_documents(
+            [Document(text=node.text, metadata=node.metadata) for node in total_nodes],
+            show_progress=VECTOR_STORE_CONFIG["show_progress"],
+            callback_manager=CallbackManager([
+                LlamaDebugHandler(print_trace_on_end=True)
+            ])
+        )
+        
+        # Handle caching and S3 upload
+        if cache_path:
+            with open(cache_path, 'wb') as f:
+                pickle.dump(index, f, protocol=STORAGE_CONFIG["pickle_protocol"])
+            logger.info(f"[create_index] Cached index at '{cache_path}'")
+        
+        if all([s3_client, bucket_name, index_cache_key, temp_dir]):
+            try:
+                index_cache_path = os.path.join(temp_dir, STORAGE_CONFIG["cache_filename"])
+                with open(index_cache_path, 'wb') as f:
+                    pickle.dump(index, f, protocol=STORAGE_CONFIG["pickle_protocol"])
                 
-                if persist:
-                    index_manager.save_indexes()
-            
-            # Merge indexes
-            combined_index = index_manager.merge_indexes()
-            
-            if not combined_index:
-                raise ValueError("No valid indexes created")
-            
-            return combined_index
+                s3_client.upload_file(
+                    Filename=index_cache_path,
+                    Bucket=bucket_name,
+                    Key=index_cache_key
+                )
+                logger.info('[create_index] Index cache uploaded to S3 successfully')
+            except Exception as e:
+                logger.error(RAG_ERROR_MESSAGES["index_creation_error"].format(error=str(e)))
 
+        return index
+
+    except Exception as e:
+        logger.error(RAG_ERROR_MESSAGES["index_creation_error"].format(error=str(e)))
+        raise
+
+def process_chunk_with_fallback(chunk: List[Document], embed_model) -> Optional[VectorStoreIndex]:
+    """Fallback processing for chunks that fail normal processing."""
+    try:
+        logger.info("[rag] Attempting fallback processing with smaller batches")
+        
+        # Process one document at a time
+        indexes = []
+        for doc in chunk:
+            try:
+                single_index = VectorStoreIndex.from_documents(
+                    [doc],
+                    embed_model=embed_model,
+                    show_progress=FALLBACK_CONFIG["show_progress"],
+                    use_async=FALLBACK_CONFIG["use_async"]
+                )
+                indexes.append(single_index)
+                logger.info("[rag] Successfully processed single document in fallback mode")
+            except Exception as e:
+                logger.error(RAG_ERROR_MESSAGES["fallback_error"].format(error=str(e)))
+                continue
+                
+            # Clear memory after each document
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
+                
+        # Merge all successful indexes
+        if indexes:
+            logger.info(f"[rag] Merging {len(indexes)} indexes from fallback processing")
+            final_index = indexes[0]
+            for idx, index in enumerate(indexes[1:], 1):
+                final_index = final_index.merge(index)
+                logger.info(f"[rag] Merged fallback index {idx+1}/{len(indexes)}")
+            return final_index
+            
+        return None
+        
+    except Exception as e:
+        logger.error(RAG_ERROR_MESSAGES["fallback_error"].format(error=str(e)))
+        return None
+
+def process_document(file_path: str) -> Optional[Document]:
+    """Process a single document file."""
+    try:
+        _, file_extension = os.path.splitext(file_path)
+        file_extension = file_extension.lower()
+        
+        if file_extension not in SUPPORTED_EXTENSIONS:
+            logger.warning(RAG_ERROR_MESSAGES["unsupported_file"].format(extension=file_extension))
+            return None
+            
+        with open(file_path, 'rb') as f:
+            content = f.read()
+            
+        text = extract_text_from_file(content, file_extension)
+        
+        if not text.strip():
+            logger.warning(RAG_ERROR_MESSAGES["no_text_content"].format(file_path=file_path))
+            return None
+            
+        return Document(
+            text=text,
+            metadata={
+                'file_name': os.path.basename(file_path),
+                'file_type': file_extension,
+                'source': file_path
+            }
+        )
+        
+    except Exception as e:
+        logger.error(RAG_ERROR_MESSAGES["processing_error"].format(file_path=file_path, error=str(e)))
+        return None
+
+def extract_text_from_file(file_path: str) -> str:
+    """
+    Extract text from a file, supporting different file types.
+
+    Args:
+        file_path (str): The path to the file.
+
+    Returns:
+        str: The extracted text.
+    """
+    path = Path(file_path)
+    if path.suffix.lower() == '.txt':
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            return text
         except Exception as e:
-            logger.error(f"[rag] Error creating indexes: {str(e)}")
-            raise
+            logger.error(f"[rag] Error reading text file {file_path}: {e}")
+            return ''
+    elif path.suffix.lower() == '.pdf':
+        # Use PyPDF to extract text from PDF files
+        try:
+            with open(file_path, 'rb') as f:
+                reader = PdfReader(f)
+                text = ''
+                for page_num, page in enumerate(reader.pages):
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text
+                return text
+        except Exception as e:
+            logger.error(f"[rag] Error extracting text from PDF {file_path}: {e}")
+            return ''
+    else:
+        logger.warning(f"[rag] Unsupported file type for {file_path}, skipping.")
+        return ''
