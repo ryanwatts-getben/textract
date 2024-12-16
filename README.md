@@ -14,3 +14,5 @@ I also did this
 and 
 
 `pip install pypdf`
+
+get the BioBERT-mnli-snli-scinli-scitail-mednli-stsb folder in root

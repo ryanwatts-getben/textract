@@ -476,24 +476,31 @@ def process_user_projects(s3_client, bucket_name: str, user_id: str, force_refre
                     f"Elapsed: {elapsed:.2f}s, Est. Remaining: {est_time_remaining:.2f}s")
         
         try:
+            # Check if index exists before attempting creation
+            index_exists = False
+            try:
+                s3_client.head_object(Bucket=bucket_name, Key=get_index_path(user_id, project_id))
+                index_exists = True
+            except ClientError:
+                index_exists = False
+            
+            # Skip if index exists and we're not forcing refresh
+            if index_exists and not force_refresh:
+                report[project_id] = "skipped"
+                skipped_count += 1
+                logger.info(f"[process_user_projects] Index already exists for project {project_id}. Skipped creation.")
+                continue
+            
+            # Attempt to create/update index
             if create_project_index(s3_client, bucket_name, user_id, project_id, force_refresh=force_refresh):
-                try:
-                    s3_client.head_object(Bucket=bucket_name, Key=get_index_path(user_id, project_id))
-                    if force_refresh:
-                        report[project_id] = "success"
-                        success_count += 1
-                        logger.info(f"[process_user_projects] Index successfully created for project {project_id}")
-                    else:
-                        report[project_id] = "skipped"
-                        skipped_count += 1
-                        logger.info(f"[process_user_projects] Index already exists for project {project_id}. Skipped creation.")
-                except ClientError:
-                    report[project_id] = "success"
-                    success_count += 1
+                report[project_id] = "success"
+                success_count += 1
+                logger.info(f"[process_user_projects] Index successfully created for project {project_id}")
             else:
                 report[project_id] = "failed"
                 failure_count += 1
                 logger.error(f"[process_user_projects] Index creation failed for project {project_id}")
+                
         except Exception as e:
             logger.error(f"[process_user_projects] Exception while processing project {project_id}: {e}")
             report[project_id] = "failed"
