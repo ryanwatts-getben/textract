@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import ParseError
 from defusedxml import ElementTree as DefusedET
+from flask_restx import Api, Resource
 
 # LlamaIndex imports
 from llama_index.core import (
@@ -37,6 +38,10 @@ from llama_index.core import (
 from llama_index.llms.anthropic import Anthropic
 
 # Local imports
+from swagger_config import (
+    api, scrape_ns, scrape_request, scrape_response, 
+    scrape_multiple_response, error_response
+)
 from rag import create_index, preprocess_document
 from disease_definition_generator import generate_multiple_definitions, get_embedding_model
 from app_rag_disease_config import (
@@ -74,6 +79,11 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Update CORS configuration
+CORS(app, resources=CORS_CONFIG)
+
+api.init_app(app)
+
 def configure_cuda_memory_limit(fraction=CUDA_MEMORY_FRACTION, device=CUDA_DEVICE):
     if torch.cuda.is_available():
         torch.cuda.set_per_process_memory_fraction(fraction, device=device)
@@ -83,9 +93,6 @@ def configure_cuda_memory_limit(fraction=CUDA_MEMORY_FRACTION, device=CUDA_DEVIC
         logger.info(f"[rag] Initial GPU Memory Allocated: {initial_memory / 1e9:.2f} GB / {total_memory / 1e9:.2f} GB")
     else:
         logger.info("CUDA is not available.")
-
-# Update CORS configuration
-CORS(app, resources=CORS_CONFIG)
 
 s3_client = boto3.client('s3')  # Initialize S3 client
 
@@ -879,98 +886,102 @@ def process_json_content(data: Any) -> str:
         logger.error(f"[app] Error processing JSON content: {str(e)}")
         return ""
 
-@app.route('/scrape/', methods=['POST'])
-def scrape_disease_info():
-    """
-    Endpoint to scrape disease information from MedlinePlus.
-    
-    Accepts two formats:
-    1. Array format:
-    {
-        "diseaseUrl": [
-            ["http://www.nlm.nih.gov/medlineplus/abdominalpain.html", "Abdominal Pain"]
-        ]
-    }
-    
-    2. Single URL format:
-    {
-        "diseaseUrl": "http://www.nlm.nih.gov/medlineplus/abdominalpain.html"
-    }
-    
-    Returns:
-        JSON object with scraped content
-    """
-    try:
-        # Log the raw request data for debugging
-        raw_data = request.get_data()
-        logger.info(f"[app] Raw request data: {raw_data}")
+@scrape_ns.route('/')
+class ScrapeDiseaseInfo(Resource):
+    @scrape_ns.expect(scrape_request)
+    @scrape_ns.response(200, 'Success', scrape_multiple_response)
+    @scrape_ns.response(400, 'Bad Request', error_response)
+    @scrape_ns.response(500, 'Server Error', error_response)
+    def post(self):
+        """
+        Scrape disease information from MedlinePlus.
         
-        # Get JSON data and log it
-        data = request.get_json(force=True)
-        logger.info(f"[app] Parsed request data: {data}")
+        Accepts two formats:
+        1. Array format:
+        {
+            "diseaseUrl": [
+                ["http://www.nlm.nih.gov/medlineplus/abdominalpain.html", "Abdominal Pain"]
+            ]
+        }
         
-        if not data:
-            logger.error("[app] No JSON data in request body")
-            return jsonify({
-                'error': 'No JSON data in request body'
-            }), 400
+        2. Single URL format:
+        {
+            "diseaseUrl": "http://www.nlm.nih.gov/medlineplus/abdominalpain.html"
+        }
+        """
+        try:
+            # Log the raw request data for debugging
+            raw_data = request.get_data()
+            logger.info(f"[app] Raw request data: {raw_data}")
             
-        if 'diseaseUrl' not in data:
-            logger.error("[app] Missing diseaseUrl in request body")
-            return jsonify({
-                'error': 'Missing diseaseUrl in request body'
-            }), 400
+            # Get JSON data and log it
+            data = request.get_json(force=True)
+            logger.info(f"[app] Parsed request data: {data}")
             
-        disease_url_data = data['diseaseUrl']
-        
-        # Handle single URL format
-        if isinstance(disease_url_data, str):
-            logger.info(f"[app] Processing single URL: {disease_url_data}")
-            result = scrape_medline_plus(disease_url_data)
-            if result is not None:
-                return jsonify(result)
-            else:
-                return jsonify({
-                    'error': 'Failed to scrape content from the provided URL'
-                }), 500
-        
-        # Handle array format
-        elif isinstance(disease_url_data, list):
-            results = {}
-            for url_pair in disease_url_data:
-                if not isinstance(url_pair, list) or len(url_pair) != 2:
-                    logger.error(f"[app] Invalid URL pair format: {url_pair}")
-                    continue
-                    
-                url, disease_name = url_pair
-                logger.info(f"[app] Scraping data for {disease_name} from {url}")
+            if not data:
+                logger.error("[app] No JSON data in request body")
+                return {
+                    'error': 'No JSON data in request body'
+                }, 400
                 
-                result = scrape_medline_plus(url)
+            if 'diseaseUrl' not in data:
+                logger.error("[app] Missing diseaseUrl in request body")
+                return {
+                    'error': 'Missing diseaseUrl in request body'
+                }, 400
                 
+            disease_url_data = data['diseaseUrl']
+            
+            # Handle single URL format
+            if isinstance(disease_url_data, str):
+                logger.info(f"[app] Processing single URL: {disease_url_data}")
+                result = scrape_medline_plus(disease_url_data)
                 if result is not None:
-                    results[disease_name] = result
+                    return result
                 else:
-                    logger.error(f"[app] Failed to scrape content for {disease_name} from {url}")
-                    results[disease_name] = {'error': f'Failed to scrape content for {disease_name}'}
+                    return {
+                        'error': 'Failed to scrape content from the provided URL'
+                    }, 500
             
-            if not results:
-                return jsonify({
-                    'error': 'Failed to scrape content from any of the provided URLs'
-                }), 500
+            # Handle array format
+            elif isinstance(disease_url_data, list):
+                results = {}
+                for url_pair in disease_url_data:
+                    if not isinstance(url_pair, list) or len(url_pair) != 2:
+                        logger.error(f"[app] Invalid URL pair format: {url_pair}")
+                        return {
+                            'error': 'Each item in diseaseUrl array must be a pair of [URL, name]'
+                        }, 400
+                        
+                    url, disease_name = url_pair
+                    logger.info(f"[app] Scraping data for {disease_name} from {url}")
+                    
+                    result = scrape_medline_plus(url)
+                    
+                    if result is not None:
+                        results[disease_name] = result
+                    else:
+                        logger.error(f"[app] Failed to scrape content for {disease_name} from {url}")
+                        results[disease_name] = {'error': f'Failed to scrape content for {disease_name}'}
                 
-            return jsonify(results)
-        
-        else:
-            logger.error("[app] Invalid diseaseUrl format")
-            return jsonify({
-                'error': 'diseaseUrl must be either a string URL or an array of [URL, name] pairs'
-            }), 400
-        
-    except Exception as e:
-        logger.error(f"[app] Error processing scrape request: {str(e)}")
-        return jsonify({
-            'error': f'Internal server error: {str(e)}'
-        }), 500
+                if not results:
+                    return {
+                        'error': 'Failed to scrape content from any of the provided URLs'
+                    }, 500
+                    
+                return results
+            
+            else:
+                logger.error("[app] Invalid diseaseUrl format")
+                return {
+                    'error': 'diseaseUrl must be either a string URL or an array of [URL, name] pairs'
+                }, 400
+            
+        except Exception as e:
+            logger.error(f"[app] Error processing scrape request: {str(e)}")
+            return {
+                'error': f'Internal server error: {str(e)}'
+            }, 500
 
 if __name__ == '__main__':
     logger.info(f"[app] Starting Flask app on {SERVER_CONFIG['host']}:{SERVER_CONFIG['port']}")
