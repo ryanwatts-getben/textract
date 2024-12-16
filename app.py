@@ -38,6 +38,7 @@ from llama_index.llms.anthropic import Anthropic
 
 # Local imports
 from rag import create_index, preprocess_document
+from ragindex import process_user_projects
 from disease_definition_generator import generate_multiple_definitions, get_embedding_model
 from app_rag_disease_config import (
     ENV_PATH,
@@ -61,6 +62,7 @@ from app_rag_disease_config import (
     INDEX_METADATA_FILENAME
 )
 from scrape import scrape_medline_plus
+from scan import scan_documents, ScanInput
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path=ENV_PATH)
@@ -463,31 +465,44 @@ class ProgressPercentage:
 
 @app.route('/index', methods=['POST'])
 def index_route():
-    """Endpoint to create or update the index."""
+    """
+    Endpoint to create or update indices for all projects of a user.
+    Expects a JSON payload with just userId: {"userId": "user_id_here"}
+    """
     try:
-        # Extract parameters from the request
+        # Extract userId from the request
         data = request.get_json()
-        user_id = data.get('userId', '00000')
-        project_id = data.get('projectId', '22222')
-        force_refresh = str(data.get('force_refresh', 'false')).lower() == 'true'
-        
-        logger.info(f"[app] Received index request - user_id: {user_id}, project_id: {project_id}, force_refresh: {force_refresh}")
+        if not data or 'userId' not in data:
+            logger.error("[app] Missing userId in request payload")
+            return jsonify({
+                'status': 'error',
+                'message': 'userId is required'
+            }), 400
+            
+        user_id = data['userId']
+        logger.info(f"[app] Received index request for user_id: {user_id}")
         
         # Configure CUDA memory limit
         configure_cuda_memory_limit(0.5, device=0)
         
-        # Call the index creation function
-        index, status = create_or_update_index(
+        # Initialize S3 client
+        s3_client = boto3.client('s3')
+        
+        # Process all projects for the user
+        report = process_user_projects(
+            s3_client=s3_client,
+            bucket_name=AWS_UPLOAD_BUCKET_NAME,
             user_id=user_id,
-            project_id=project_id,
-            force_refresh=force_refresh
+            force_refresh=False
         )
         
-        # Return a success response
+        # Return a success response with the processing report
         return jsonify({
             'status': 'success',
-            'message': status
+            'message': 'Indexing completed',
+            'report': report
         }), 200
+        
     except Exception as e:
         logger.error(f"[app] Error in /index route: {str(e)}")
         return jsonify({
@@ -970,6 +985,45 @@ def scrape_disease_info():
         logger.error(f"[app] Error processing scrape request: {str(e)}")
         return jsonify({
             'error': f'Internal server error: {str(e)}'
+        }), 500
+
+@app.route('/beginScan', methods=['POST'])
+def begin_scan():
+    """
+    Endpoint to begin scanning documents for mass tort analysis.
+    Expects a JSON payload matching the ScanInput type.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'message': 'No JSON data provided'
+            }), 400
+
+        # Validate required fields
+        required_fields = ['userId', 'projectId', 'massTorts']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({
+                'status': 'error',
+                'message': f'Missing required fields: {", ".join(missing_fields)}'
+            }), 400
+
+        # Process the scan
+        result = scan_documents(data)
+        
+        # Return results
+        if result['status'] == 'success':
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+
+    except Exception as e:
+        logger.error(f"[app] Error in /beginScan endpoint: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
         }), 500
 
 if __name__ == '__main__':
