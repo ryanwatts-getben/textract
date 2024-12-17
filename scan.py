@@ -99,14 +99,15 @@ def load_index(user_id: str, project_id: str) -> Optional[VectorStoreIndex]:
         # Download index file
         s3_client.download_file(AWS_UPLOAD_BUCKET_NAME, index_key, temp_filename)
         
-        # Check CUDA availability before loading
+        # Import torch and set device before loading
         import torch
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        if device == 'cpu':
+        if not torch.cuda.is_available():
             logger.info("[scan] CUDA not available, using CPU")
+            torch.set_default_tensor_type('torch.FloatTensor')  # Force CPU tensors
         
-        # Load the index with appropriate device mapping
-        index = torch.load(temp_filename, map_location=device)
+        # Load the index using pickle
+        with open(temp_filename, 'rb') as f:
+            index = pickle.load(f)
             
         return index
     except Exception as e:

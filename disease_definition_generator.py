@@ -193,6 +193,7 @@ def get_embedding_model(model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-s
         raise
 class DiseaseDefinitionEngine:
     _instance = None  # Class variable to hold the singleton instance
+    _index = None  # Class variable to hold the lazily loaded index
 
     def __new__(cls):
         if cls._instance is None:
@@ -232,14 +233,6 @@ class DiseaseDefinitionEngine:
         Settings.embed_model = self.embed_model
         Settings.llm = self.llm
         logger.info("[disease_definition_generator] Global settings configured with embedding model and LLM")
-
-        # Attempt to load the index
-        try:
-            self.index = self.load_index()
-            logger.info("[disease_definition_generator] Index loaded successfully")
-        except Exception as e:
-            logger.warning(f"[disease_definition_generator] No index was found: {str(e)}")
-            self.index = None  # Handle absence of index gracefully
 
         # Initialize prompt template
         self.prompt_template = (
@@ -311,7 +304,13 @@ class DiseaseDefinitionEngine:
                 s3_client = boto3.client('s3')
                 s3_client.download_file(BUCKET_NAME, INDEX_KEY, temp_index_path)
                 
-                # Load the index from the temporary file
+                # Check CUDA availability before loading
+                import torch
+                if not torch.cuda.is_available():
+                    logger.info("[disease_definition_generator] CUDA not available, using CPU")
+                    torch.set_default_tensor_type('torch.FloatTensor')  # Force CPU tensors
+                
+                # Load the index using pickle
                 with open(temp_index_path, 'rb') as f:
                     index = pickle.load(f)
                     
@@ -333,24 +332,11 @@ class DiseaseDefinitionEngine:
             logger.error(f"[disease_definition_generator] Error loading index: {str(e)}")
             return None
 
-    def save_index(self, index: VectorStoreIndex) -> bool:
-        """Save the index to storage."""
-        try:
-            # Define the storage path
-            storage_path = os.path.join(os.path.dirname(__file__), 'storage')
-            
-            # Create storage directory if it doesn't exist
-            os.makedirs(storage_path, exist_ok=True)
-            
-            # Save the index
-            index.storage_context.persist(persist_dir=storage_path)
-            logger.info(f"[disease_definition_generator] Index saved successfully to: {storage_path}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"[disease_definition_generator] Error saving index: {str(e)}")
-            return False
+    def get_index(self) -> Optional[VectorStoreIndex]:
+        """Get the index, loading it if necessary."""
+        if self._index is None:
+            self._index = self.load_index()
+        return self._index
 
     def generate_definition(self, disease_name: str) -> DiseaseDefinition:
         """Generates a structured definition for a given disease"""
@@ -361,9 +347,10 @@ class DiseaseDefinitionEngine:
             formatted_prompt = self.prompt_template.format(disease_name=disease_name)
             
             # Get response either from index or directly from LLM
-            if self.index is not None:
+            index = self.get_index()
+            if index is not None:
                 logger.info("[disease_definition_generator] Using index for query")
-                query_engine = self.index.as_query_engine(
+                query_engine = index.as_query_engine(
                     llm=Settings.llm,
                     response_mode="compact",
                     similarity_top_k=3,
@@ -396,7 +383,7 @@ class DiseaseDefinitionEngine:
             logger.error(f"[disease_definition_generator] Error generating definition for {disease_name}: {str(e)}")
             raise
 
-# Initialize the engine at startup
+# Initialize the engine at startup (but don't load index yet)
 try:
     engine = DiseaseDefinitionEngine()
     logger.info("[disease_definition_generator] DiseaseDefinitionEngine initialized successfully")
@@ -432,10 +419,3 @@ def generate_multiple_definitions(disease_names: List[str]) -> Dict[str, Any]:
             results[disease] = {'error': str(e)}
 
     return results
-
-try:
-    engine = DiseaseDefinitionEngine()
-    logger.info("[disease_definition_generator] DiseaseDefinitionEngine initialized successfully")
-except Exception as e:
-    logger.error("[disease_definition_generator] Engine initialization failed: %s", str(e))
-    raise
