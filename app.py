@@ -493,7 +493,7 @@ def index_route():
             s3_client=s3_client,
             bucket_name=AWS_UPLOAD_BUCKET_NAME,
             user_id=user_id,
-            force_refresh=False
+            force_refresh=True
         )
         
         # Return a success response with the processing report
