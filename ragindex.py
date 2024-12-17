@@ -5,9 +5,11 @@ import tempfile
 import shutil
 import argparse
 from typing import List, Dict, Optional, Set, Tuple
-from llama_index.core import VectorStoreIndex, Document
+from llama_index.core import VectorStoreIndex, Document, Settings
 from llama_index.embeddings.langchain import LangchainEmbedding
 from llama_index.llms.anthropic import Anthropic
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.callbacks import CallbackManager, LlamaDebugHandler
 from langchain_huggingface import HuggingFaceEmbeddings
 import torch
 import boto3
@@ -17,10 +19,28 @@ from dotenv import load_dotenv
 import json
 import io
 from pypdf import PdfReader
+
+# Import configurations
+from app_rag_disease_config import (
+    LOG_CONFIG,
+    SUPPORTED_EXTENSIONS,
+    EMBEDDING_MODEL_CONFIG,
+    RAGDocumentConfig,
+    VECTOR_STORE_CONFIG,
+    FALLBACK_CONFIG,
+    STORAGE_CONFIG,
+    RAG_ERROR_MESSAGES,
+    CATEGORY_PREFIXES
+)
+
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=getattr(logging, LOG_CONFIG["level"]),
+    format=LOG_CONFIG["format"]
+)
 logger = logging.getLogger(__name__)
 load_dotenv()
+
 AWS_UPLOAD_BUCKET_NAME = os.getenv("AWS_UPLOAD_BUCKET_NAME", "my-bucket")
 logger.info(f"[config] AWS_UPLOAD_BUCKET_NAME set to: {AWS_UPLOAD_BUCKET_NAME}")
 
@@ -35,7 +55,7 @@ def preprocess_document(document_text: str) -> str:
     logger.debug(f"[preprocess_document] Processed document length: {len(processed_text)}")
     return processed_text
 
-def get_embedding_model(model_name: str = "all-MiniLM-L6-v2"):
+def get_embedding_model(model_name: str = EMBEDDING_MODEL_CONFIG["model_name"]):
     """Initialize embedding model with proper device configuration."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"[get_embedding_model] Using device: {device} for embeddings")
@@ -70,29 +90,38 @@ def create_index(
         embed_model = get_embedding_model()
         logger.info('[create_index] Creating VectorStoreIndex with provided documents')
         
-        index = VectorStoreIndex.from_documents(documents, embed_model=embed_model)
+        # Configure settings for batching and chunking
+        Settings.chunk_size = VECTOR_STORE_CONFIG["chunk_size"]
+        Settings.chunk_overlap = VECTOR_STORE_CONFIG["chunk_overlap"]
+        Settings.embed_model = embed_model
+        Settings.node_parser = SentenceSplitter(
+            chunk_size=VECTOR_STORE_CONFIG["chunk_size"],
+            chunk_overlap=VECTOR_STORE_CONFIG["chunk_overlap"]
+        )
+        Settings.embed_batch_size = VECTOR_STORE_CONFIG["embed_batch_size"]
+        
+        index = VectorStoreIndex.from_documents(
+            documents=documents,
+            show_progress=VECTOR_STORE_CONFIG["show_progress"]
+        )
         logger.info('[create_index] VectorStoreIndex created successfully')
         logger.debug(f"[create_index] VectorStoreIndex details: {index}")
         
         # Cache locally
-        current_files = set(os.listdir(temp_dir))
-        logger.debug(f"[create_index] Current files in temp_dir '{temp_dir}': {current_files}")
-        with open(cache_path, 'wb') as f:
-            pickle.dump((index, current_files), f, protocol=pickle.HIGHEST_PROTOCOL)
-        logger.info("[create_index] Created and cached new vector index locally")
-        logger.debug(f"[create_index] Cached index at '{cache_path}'")
+        if cache_path:
+            with open(cache_path, 'wb') as f:
+                pickle.dump(index, f, protocol=STORAGE_CONFIG["pickle_protocol"])
+            logger.info("[create_index] Created and cached new vector index locally")
+            logger.debug(f"[create_index] Cached index at '{cache_path}'")
         
         # Upload to S3 if parameters provided
-        if all([s3_client, bucket_name, index_cache_key, temp_dir, cache_path]):
-            logger.info("[create_index] S3 caching parameters provided. Proceeding to upload index to S3.")
+        if all([s3_client, bucket_name, index_cache_key, temp_dir]):
             try:
-                index_cache_path = os.path.join(temp_dir, 'index_cache.pkl')
-                logger.debug(f"[create_index] Index cache path set to: {index_cache_path}")
+                index_cache_path = os.path.join(temp_dir, STORAGE_CONFIG["cache_filename"])
                 with open(index_cache_path, 'wb') as f:
-                    pickle.dump(index, f)
+                    pickle.dump(index, f, protocol=STORAGE_CONFIG["pickle_protocol"])
                 logger.info('[create_index] Index serialized and saved to local cache successfully')
                 
-                logger.info(f"[create_index] Uploading index cache from '{index_cache_path}' to S3 bucket '{bucket_name}' with key '{index_cache_key}'")
                 s3_client.upload_file(
                     Filename=index_cache_path,
                     Bucket=bucket_name,
@@ -100,13 +129,12 @@ def create_index(
                 )
                 logger.info('[create_index] Index cache uploaded to S3 successfully')
             except Exception as e:
-                logger.error(f'[create_index] Error caching index to S3: {str(e)}')
+                logger.error(RAG_ERROR_MESSAGES["index_creation_error"].format(error=str(e)))
         
-        logger.info("[create_index] Index creation process completed successfully.")
         return index
 
     except Exception as e:
-        logger.error(f"[create_index] Error creating index: {str(e)}")
+        logger.error(RAG_ERROR_MESSAGES["index_creation_error"].format(error=str(e)))
         raise
 
 def query_index(index: VectorStoreIndex, query_text: str) -> str:
@@ -341,10 +369,10 @@ def read_file_content(file_path: str) -> str:
             with open(file_path, 'r', encoding='latin-1') as file:
                 return file.read()
         except Exception as e:
-            logger.error(f"[read_file_content] Failed to read file with latin-1 encoding: {e}")
+            logger.error(RAG_ERROR_MESSAGES["file_read_error"].format(file_path=file_path, error=str(e)))
             raise
     except Exception as e:
-        logger.error(f"[read_file_content] Failed to read file: {e}")
+        logger.error(RAG_ERROR_MESSAGES["file_read_error"].format(file_path=file_path, error=str(e)))
         raise
 
 def create_project_index(
@@ -377,7 +405,7 @@ def create_project_index(
             logger.info(f"[create_project_index] Index for user_id: {user_id}, project_id: {project_id} already exists. Skipping index creation.")
             return True
         except ClientError as e:
-            logger.warning(f"[create_project_index] Index does not exist for user_id: {user_id}, project_id: {project_id}. Proceeding to create index. Error: {e}")
+            logger.warning(RAG_ERROR_MESSAGES["index_not_found"].format(user_id=user_id, project_id=project_id, error=str(e)))
     
     temp_dir = tempfile.mkdtemp(prefix=f"{user_id}_{project_id}_")
     logger.info(f"[create_project_index] Temporary working directory created at: {temp_dir}")
@@ -388,7 +416,7 @@ def create_project_index(
         local_docs = download_project_documents(s3_client, bucket_name, user_id, project_id, temp_dir)
         logger.debug(f"[create_project_index] Local documents downloaded: {local_docs}")
         if not local_docs:
-            logger.warning(f"[create_project_index] No documents found for user_id: {user_id}, project_id: {project_id}. Skipping index creation.")
+            logger.warning(RAG_ERROR_MESSAGES["no_documents"].format(user_id=user_id, project_id=project_id))
             return True
         
         # Preprocess documents
@@ -404,17 +432,17 @@ def create_project_index(
                     documents.append(Document(text=text))
                     logger.info(f"[create_project_index] Successfully preprocessed and added document from '{fpath}'")
                 else:
-                    logger.warning(f"[create_project_index] Empty content from file: {fpath}")
+                    logger.warning(RAG_ERROR_MESSAGES["empty_document"].format(file_path=fpath))
             except Exception as e:
-                logger.error(f"[create_project_index] Failed to read/preprocess '{fpath}': {e}")
+                logger.error(RAG_ERROR_MESSAGES["processing_error"].format(file_path=fpath, error=str(e)))
                 continue  # Skip this file but continue with others
         
         if not documents:
-            logger.warning(f"[create_project_index] No valid documents could be processed for user_id: {user_id}, project_id: {project_id}. Skipping index creation.")
+            logger.warning(RAG_ERROR_MESSAGES["no_valid_documents"].format(user_id=user_id, project_id=project_id))
             return True
         
         # Create index
-        cache_path = os.path.join(temp_dir, 'local_index_cache.pkl')
+        cache_path = os.path.join(temp_dir, STORAGE_CONFIG["cache_filename"])
         logger.debug(f"[create_project_index] Cache path for index: {cache_path}")
         try:
             logger.info(f"[create_project_index] Creating index for user_id: {user_id}, project_id: {project_id}")
@@ -431,10 +459,10 @@ def create_project_index(
                 logger.debug(f"[create_project_index] Index details: {index}")
                 return True
             else:
-                logger.error(f"[create_project_index] Index creation returned None for user_id: {user_id}, project_id: {project_id}")
+                logger.error(RAG_ERROR_MESSAGES["index_creation_failed"].format(user_id=user_id, project_id=project_id))
                 return False
         except Exception as e:
-            logger.error(f"[create_project_index] Error creating index for user_id: {user_id}, project_id: {project_id}: {e}")
+            logger.error(RAG_ERROR_MESSAGES["index_creation_error"].format(error=str(e)))
             return False
     finally:
         logger.info(f"[create_project_index] Initiating cleanup of temporary directory: {temp_dir}")
@@ -499,10 +527,10 @@ def process_user_projects(s3_client, bucket_name: str, user_id: str, force_refre
             else:
                 report[project_id] = "failed"
                 failure_count += 1
-                logger.error(f"[process_user_projects] Index creation failed for project {project_id}")
+                logger.error(RAG_ERROR_MESSAGES["index_creation_failed"].format(user_id=user_id, project_id=project_id))
                 
         except Exception as e:
-            logger.error(f"[process_user_projects] Exception while processing project {project_id}: {e}")
+            logger.error(RAG_ERROR_MESSAGES["project_processing_error"].format(project_id=project_id, error=str(e)))
             report[project_id] = "failed"
             failure_count += 1
 
@@ -526,27 +554,85 @@ def cleanup_temp_dir(temp_dir: str):
         shutil.rmtree(temp_dir)
         logger.debug(f"[cleanup_temp_dir] Temporary directory '{temp_dir}' removed successfully.")
     except Exception as e:
-        logger.error(f"[cleanup_temp_dir] Failed to clean up '{temp_dir}': {e}")
+        logger.error(RAG_ERROR_MESSAGES["cleanup_error"].format(temp_dir=temp_dir, error=str(e)))
 
 def verify_index_integrity(index: VectorStoreIndex) -> bool:
     """
-    Placeholder: Verify that the index is valid and not corrupted.
+    Verify that the index is valid and not corrupted.
     Currently returns True, but can be extended.
     """
     logger.info("[verify_index_integrity] Verifying index integrity.")
-    # Implement actual integrity checks here
-    logger.debug("[verify_index_integrity] Index integrity check passed.")
-    return True
+    try:
+        # Basic integrity checks
+        if not index or not hasattr(index, 'docstore'):
+            logger.error(RAG_ERROR_MESSAGES["invalid_index"])
+            return False
+            
+        # Check if index has documents
+        doc_count = len(list(index.docstore.docs.values()))
+        if doc_count == 0:
+            logger.warning(RAG_ERROR_MESSAGES["empty_index"])
+            return False
+            
+        logger.info(f"[verify_index_integrity] Index contains {doc_count} documents")
+        return True
+        
+    except Exception as e:
+        logger.error(RAG_ERROR_MESSAGES["index_verification_error"].format(error=str(e)))
+        return False
 
 def remove_orphaned_indices(s3_client, bucket_name: str):
     """
-    Placeholder for removing orphaned indices.
-    Could list all indices and verify if corresponding documents exist.
-    Not fully implemented here.
+    Remove orphaned indices that don't have corresponding documents.
     """
     logger.info("[remove_orphaned_indices] Initiating check for orphaned indices in bucket.")
-    # Implement logic to identify and remove orphaned indices
-    logger.debug("[remove_orphaned_indices] Orphaned indices removal not implemented yet.")
+    try:
+        # List all indices
+        paginator = s3_client.get_paginator('list_objects_v2')
+        indices = []
+        for page in paginator.paginate(Bucket=bucket_name, Prefix=''):
+            for obj in page.get('Contents', []):
+                if obj['Key'].endswith('index.pkl'):
+                    indices.append(obj['Key'])
+        
+        logger.info(f"[remove_orphaned_indices] Found {len(indices)} indices to check")
+        
+        # Check each index
+        for index_key in indices:
+            try:
+                # Extract user_id and project_id from key
+                parts = index_key.split('/')
+                if len(parts) >= 2:
+                    user_id = parts[0]
+                    project_id = parts[1]
+                    
+                    # Check if documents exist
+                    doc_prefix = get_document_prefix(user_id, project_id)
+                    response = s3_client.list_objects_v2(
+                        Bucket=bucket_name,
+                        Prefix=doc_prefix,
+                        MaxKeys=1
+                    )
+                    
+                    if 'Contents' not in response:
+                        logger.warning(RAG_ERROR_MESSAGES["orphaned_index"].format(
+                            index_key=index_key,
+                            user_id=user_id,
+                            project_id=project_id
+                        ))
+                        # Delete orphaned index
+                        s3_client.delete_object(Bucket=bucket_name, Key=index_key)
+                        logger.info(f"[remove_orphaned_indices] Deleted orphaned index: {index_key}")
+                        
+            except Exception as e:
+                logger.error(RAG_ERROR_MESSAGES["orphan_check_error"].format(
+                    index_key=index_key,
+                    error=str(e)
+                ))
+                continue
+                
+    except Exception as e:
+        logger.error(RAG_ERROR_MESSAGES["orphan_removal_error"].format(error=str(e)))
 
 ########################################
 # Example Usage (Commented Out)
@@ -555,11 +641,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process documents and create indices for a specific user')
     parser.add_argument('user_id', help='The user ID to process')
     parser.add_argument('--force-refresh', action='store_true', help='Force refresh of existing indices')
+    parser.add_argument('--cleanup', action='store_true', help='Remove orphaned indices')
     
     args = parser.parse_args()
     
     logger.info(f"Starting processing for user: {args.user_id}")
     s3 = boto3.client('s3')
+    
+    if args.cleanup:
+        remove_orphaned_indices(s3, AWS_UPLOAD_BUCKET_NAME)
     
     report = process_user_projects(s3, AWS_UPLOAD_BUCKET_NAME, args.user_id, force_refresh=args.force_refresh)
     logger.info(f"Processing report for user {args.user_id}: {report}")
