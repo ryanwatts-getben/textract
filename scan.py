@@ -99,17 +99,14 @@ def load_index(user_id: str, project_id: str) -> Optional[VectorStoreIndex]:
         # Download index file
         s3_client.download_file(AWS_UPLOAD_BUCKET_NAME, index_key, temp_filename)
         
-        # Load the index with CPU fallback if CUDA is not available
-        with open(temp_filename, 'rb') as f:
-            try:
-                index = pickle.load(f)
-            except RuntimeError as e:
-                if "CUDA" in str(e):
-                    logger.info("[scan] CUDA not available, falling back to CPU")
-                    import torch
-                    index = pickle.load(f, map_location=torch.device('cpu'))
-                else:
-                    raise
+        # Check CUDA availability before loading
+        import torch
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        if device == 'cpu':
+            logger.info("[scan] CUDA not available, using CPU")
+        
+        # Load the index with appropriate device mapping
+        index = torch.load(temp_filename, map_location=device)
             
         return index
     except Exception as e:
