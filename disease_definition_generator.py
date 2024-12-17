@@ -304,14 +304,15 @@ class DiseaseDefinitionEngine:
                 s3_client = boto3.client('s3')
                 s3_client.download_file(BUCKET_NAME, INDEX_KEY, temp_index_path)
                 
-                # Check CUDA availability and set device
+                # Check CUDA availability
                 import torch
-                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                if device.type == 'cpu':
+                if not torch.cuda.is_available():
                     logger.info("[disease_definition_generator] CUDA not available, using CPU")
-                
-                # Load the index with appropriate device mapping
-                index = torch.load(temp_index_path, map_location=device)
+                    # Load with CPU mapping
+                    index = torch.load(temp_index_path, map_location='cpu')
+                else:
+                    # Load normally
+                    index = torch.load(temp_index_path)
                     
                 logger.info("[disease_definition_generator] Index loaded successfully from S3")
                 return index

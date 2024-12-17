@@ -99,14 +99,15 @@ def load_index(user_id: str, project_id: str) -> Optional[VectorStoreIndex]:
         # Download index file
         s3_client.download_file(AWS_UPLOAD_BUCKET_NAME, index_key, temp_filename)
         
-        # Check CUDA availability and set device
+        # Check CUDA availability
         import torch
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        if device.type == 'cpu':
+        if not torch.cuda.is_available():
             logger.info("[scan] CUDA not available, using CPU")
-        
-        # Load the index with appropriate device mapping
-        index = torch.load(temp_filename, map_location=device)
+            # Load with CPU mapping
+            index = torch.load(temp_filename, map_location='cpu')
+        else:
+            # Load normally
+            index = torch.load(temp_filename)
             
         return index
     except Exception as e:
