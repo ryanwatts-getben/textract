@@ -22,6 +22,9 @@ from app_rag_disease_config import (
     STORAGE_CONFIG
 )
 
+# Import from ragindex
+from ragindex import create_project_index
+
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, LOG_CONFIG["level"]),
@@ -86,7 +89,7 @@ class ScanResult(TypedDict):
 s3_client = boto3.client('s3')
 
 def load_index(user_id: str, project_id: str) -> Optional[VectorStoreIndex]:
-    """Load the index for a given user and project."""
+    """Load the index for a given user and project. If index doesn't exist, attempt to create it."""
     try:
         index_key = f"{user_id}/{project_id}/index.pkl"
         logger.info(f"[scan] Loading index from s3://{AWS_UPLOAD_BUCKET_NAME}/{index_key}")
@@ -95,17 +98,44 @@ def load_index(user_id: str, project_id: str) -> Optional[VectorStoreIndex]:
         with tempfile.NamedTemporaryFile(delete=False) as temp_file:
             temp_filename = temp_file.name
         
-        # Download index file
-        s3_client.download_file(AWS_UPLOAD_BUCKET_NAME, index_key, temp_filename)
-        
-        # Load the index using pickle
-        with open(temp_filename, 'rb') as f:
-            index = pickle.load(f)
-        
-        logger.info("[scan] Successfully loaded index")
-        return index
+        try:
+            # Try to download existing index
+            s3_client.download_file(AWS_UPLOAD_BUCKET_NAME, index_key, temp_filename)
+            
+            # Load the index using pickle
+            with open(temp_filename, 'rb') as f:
+                index = pickle.load(f)
+            
+            logger.info("[scan] Successfully loaded existing index")
+            return index
+            
+        except ClientError as e:
+            if e.response['Error']['Code'] == '404':
+                logger.info("[scan] Index not found, attempting to create new index")
+                try:
+                    # Attempt to create new index
+                    index = create_project_index(
+                        s3_client=s3_client,
+                        bucket_name=AWS_UPLOAD_BUCKET_NAME,
+                        user_id=user_id,
+                        project_id=project_id,
+                        force_refresh=True
+                    )
+                    if index:
+                        logger.info("[scan] Successfully created new index")
+                        return index
+                    else:
+                        logger.error("[scan] Failed to create new index")
+                        return None
+                except Exception as create_error:
+                    logger.error(f"[scan] Error creating new index: {str(create_error)}")
+                    return None
+            else:
+                logger.error(f"[scan] Error accessing S3: {str(e)}")
+                return None
+                
     except Exception as e:
-        logger.error(f"[scan] Error loading index: {str(e)}")
+        logger.error(f"[scan] Error in load_index: {str(e)}")
         return None
     finally:
         # Clean up the temporary file
@@ -270,29 +300,38 @@ def scan_documents(input_data: ScanInput) -> Dict:
     {
         'status': 'success' | 'error',
         'message': str,
-        'results': List[ScanResult]  # Only present on success
+        'results': List[ScanResult],  # Only present on success
+        'errors': List[Dict]  # List of errors encountered during processing
     }
     """
     start_time = time.time()
     logger.info(f"[scan] Starting scan for user {input_data['userId']}")
     logger.info(f"[scan] Processing {len(input_data['massTorts'])} mass torts")
     
+    results = []
+    errors = []
+    total_diseases = sum(len(mt['diseases']) for mt in input_data['massTorts'])
+    processed_diseases = 0
+    
     try:
         # Load the index
         logger.info("[scan] Loading index from S3")
         index = load_index(input_data['userId'], input_data['projectId'])
         if not index:
-            logger.error("[scan] Failed to load index")
+            error_msg = "Failed to load or create index"
+            logger.error(f"[scan] {error_msg}")
+            errors.append({
+                'type': 'index_error',
+                'message': error_msg,
+                'userId': input_data['userId'],
+                'projectId': input_data['projectId']
+            })
             return {
                 'status': 'error',
-                'message': 'Failed to load index'
+                'message': error_msg,
+                'errors': errors
             }
-        logger.info("[scan] Successfully loaded index")
-        
-        results = []
-        total_diseases = sum(len(mt['diseases']) for mt in input_data['massTorts'])
-        processed_diseases = 0
-        
+            
         for mass_tort in input_data['massTorts']:
             mt_start_time = time.time()
             logger.info(f"[scan] Processing mass tort: {mass_tort['officialName']} "
@@ -304,23 +343,41 @@ def scan_documents(input_data: ScanInput) -> Dict:
                 logger.info(f"[scan] Analyzing disease {processed_diseases}/{total_diseases}: "
                           f"{disease['name']}")
                 
-                # Analyze disease
-                scan_result = analyze_disease(index, disease, mass_tort)
-                
-                # Store results
-                logger.info(f"[scan] Storing results for disease: {disease['name']}")
-                if store_scan_results(
-                    input_data['userId'],
-                    input_data['projectId'],
-                    mass_tort['id'],
-                    disease['id'],
-                    scan_result
-                ):
-                    results.append(scan_result)
-                    disease_time = time.time() - disease_start_time
-                    logger.info(f"[scan] Completed disease analysis in {disease_time:.2f} seconds")
-                else:
-                    logger.error(f"[scan] Failed to store results for disease {disease['name']}")
+                try:
+                    # Analyze disease
+                    scan_result = analyze_disease(index, disease, mass_tort)
+                    
+                    # Store results
+                    logger.info(f"[scan] Storing results for disease: {disease['name']}")
+                    if store_scan_results(
+                        input_data['userId'],
+                        input_data['projectId'],
+                        mass_tort['id'],
+                        disease['id'],
+                        scan_result
+                    ):
+                        results.append(scan_result)
+                        disease_time = time.time() - disease_start_time
+                        logger.info(f"[scan] Completed disease analysis in {disease_time:.2f} seconds")
+                    else:
+                        error_msg = f"Failed to store results for disease {disease['name']}"
+                        logger.error(f"[scan] {error_msg}")
+                        errors.append({
+                            'type': 'storage_error',
+                            'message': error_msg,
+                            'diseaseId': disease['id'],
+                            'massTortId': mass_tort['id']
+                        })
+                except Exception as e:
+                    error_msg = f"Error analyzing disease {disease['name']}: {str(e)}"
+                    logger.error(f"[scan] {error_msg}")
+                    errors.append({
+                        'type': 'analysis_error',
+                        'message': error_msg,
+                        'diseaseId': disease['id'],
+                        'massTortId': mass_tort['id']
+                    })
+                    continue  # Continue with next disease
             
             mt_time = time.time() - mt_start_time
             logger.info(f"[scan] Completed mass tort {mass_tort['officialName']} "
@@ -330,18 +387,31 @@ def scan_documents(input_data: ScanInput) -> Dict:
         logger.info(f"[scan] Scan completed in {total_time:.2f} seconds. "
                    f"Processed {len(results)}/{total_diseases} diseases successfully")
         
+        # Determine overall status
+        status = 'success' if len(results) > 0 else 'error'
+        message = f"Successfully processed {len(results)}/{total_diseases} diseases"
+        if errors:
+            message += f" with {len(errors)} errors"
+        
         return {
-            'status': 'success',
-            'message': f'Successfully processed {len(results)} diseases',
-            'results': results
+            'status': status,
+            'message': message,
+            'results': results,
+            'errors': errors
         }
         
     except Exception as e:
         total_time = time.time() - start_time
-        logger.error(f"[scan] Error in scan process after {total_time:.2f} seconds: {str(e)}")
+        error_msg = f"Error in scan process after {total_time:.2f} seconds: {str(e)}"
+        logger.error(f"[scan] {error_msg}")
+        errors.append({
+            'type': 'scan_error',
+            'message': error_msg
+        })
         return {
             'status': 'error',
-            'message': str(e)
+            'message': error_msg,
+            'errors': errors
         }
 
 # Export the main function and types
