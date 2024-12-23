@@ -186,20 +186,40 @@ def analyze_disease(index: VectorStoreIndex, disease: Disease, mass_tort: MassTo
     start_time = time.time()
     logger.info(f"[scan] Starting analysis of disease '{disease['name']}' for mass tort '{mass_tort['officialName']}'")
     
-    # Log disease characteristics
-    logger.info(f"[scan] Disease characteristics:"
-                f"\n - Symptoms: {len(disease['symptoms'])}"
-                f"\n - Lab Results: {len(disease['labResults'])}"
-                f"\n - Diagnostic Procedures: {len(disease['diagnosticProcedures'])}"
-                f"\n - Risk Factors: {len(disease['riskFactors'])}")
+    # Log disease characteristics in detail
+    logger.info(f"[scan] Disease characteristics for {disease['name']}:")
+    
+    # Log symptoms
+    symptoms = [s['name'] for s in disease['symptoms']]
+    logger.info(f"[scan] Symptoms ({len(symptoms)}):")
+    for symptom in symptoms:
+        logger.info(f"[scan]   - {symptom}")
+    
+    # Log lab results
+    lab_results = [f"{l['name']} ({l['range']})" for l in disease['labResults']]
+    logger.info(f"[scan] Lab Results ({len(lab_results)}):")
+    for lab_result in lab_results:
+        logger.info(f"[scan]   - {lab_result}")
+    
+    # Log diagnostic procedures
+    procedures = [p['name'] for p in disease['diagnosticProcedures']]
+    logger.info(f"[scan] Diagnostic Procedures ({len(procedures)}):")
+    for procedure in procedures:
+        logger.info(f"[scan]   - {procedure}")
+    
+    # Log risk factors
+    risk_factors = [r['name'] for r in disease['riskFactors']]
+    logger.info(f"[scan] Risk Factors ({len(risk_factors)}):")
+    for risk_factor in risk_factors:
+        logger.info(f"[scan]   - {risk_factor}")
     
     # Build query from disease details
     query_parts = [
         f"Find evidence related to {disease['name']} with the following characteristics:",
-        "Symptoms: " + ", ".join(s['name'] for s in disease['symptoms']),
-        "Lab Results: " + ", ".join(f"{l['name']} ({l['range']})" for l in disease['labResults']),
-        "Diagnostic Procedures: " + ", ".join(p['name'] for p in disease['diagnosticProcedures']),
-        "Risk Factors: " + ", ".join(r['name'] for r in disease['riskFactors'])
+        "Symptoms: " + ", ".join(symptoms) if symptoms else "No symptoms specified",
+        "Lab Results: " + ", ".join(lab_results) if lab_results else "No lab results specified",
+        "Diagnostic Procedures: " + ", ".join(procedures) if procedures else "No procedures specified",
+        "Risk Factors: " + ", ".join(risk_factors) if risk_factors else "No risk factors specified"
     ]
     query = "\n".join(query_parts)
     logger.debug(f"[scan] Generated query:\n{query}")
@@ -222,28 +242,37 @@ def analyze_disease(index: VectorStoreIndex, disease: Disease, mass_tort: MassTo
     for symptom in disease['symptoms']:
         if symptom['name'].lower() in response_text:
             matched_symptoms.append(symptom['name'])
-            logger.debug(f"[scan] Matched symptom: {symptom['name']}")
+            logger.info(f"[scan] ✓ Matched symptom: {symptom['name']}")
+        else:
+            logger.debug(f"[scan] ✗ No match for symptom: {symptom['name']}")
             
     # Process lab results
     logger.info("[scan] Processing lab result matches")
     for lab_result in disease['labResults']:
+        result_str = f"{lab_result['name']} ({lab_result['range']})"
         if lab_result['name'].lower() in response_text:
-            matched_lab_results.append(f"{lab_result['name']} ({lab_result['range']})")
-            logger.debug(f"[scan] Matched lab result: {lab_result['name']}")
+            matched_lab_results.append(result_str)
+            logger.info(f"[scan] ✓ Matched lab result: {result_str}")
+        else:
+            logger.debug(f"[scan] ✗ No match for lab result: {result_str}")
             
     # Process procedures
     logger.info("[scan] Processing diagnostic procedure matches")
     for procedure in disease['diagnosticProcedures']:
         if procedure['name'].lower() in response_text:
             matched_procedures.append(procedure['name'])
-            logger.debug(f"[scan] Matched procedure: {procedure['name']}")
+            logger.info(f"[scan] ✓ Matched procedure: {procedure['name']}")
+        else:
+            logger.debug(f"[scan] ✗ No match for procedure: {procedure['name']}")
             
     # Process risk factors
     logger.info("[scan] Processing risk factor matches")
     for risk_factor in disease['riskFactors']:
         if risk_factor['name'].lower() in response_text:
             matched_risk_factors.append(risk_factor['name'])
-            logger.debug(f"[scan] Matched risk factor: {risk_factor['name']}")
+            logger.info(f"[scan] ✓ Matched risk factor: {risk_factor['name']}")
+        else:
+            logger.debug(f"[scan] ✗ No match for risk factor: {risk_factor['name']}")
     
     # Calculate confidence
     total_items = len(disease['symptoms']) + len(disease['labResults']) + \
@@ -252,13 +281,13 @@ def analyze_disease(index: VectorStoreIndex, disease: Disease, mass_tort: MassTo
                    len(matched_procedures) + len(matched_risk_factors)
     confidence = matched_items / total_items if total_items > 0 else 0.0
     
-    # Log match summary
-    logger.info(f"[scan] Match summary for {disease['name']}:"
-                f"\n - Symptoms: {len(matched_symptoms)}/{len(disease['symptoms'])}"
-                f"\n - Lab Results: {len(matched_lab_results)}/{len(disease['labResults'])}"
-                f"\n - Procedures: {len(matched_procedures)}/{len(disease['diagnosticProcedures'])}"
-                f"\n - Risk Factors: {len(matched_risk_factors)}/{len(disease['riskFactors'])}"
-                f"\n - Confidence Score: {confidence:.2%}")
+    # Log match summary with percentages
+    logger.info(f"[scan] Match summary for {disease['name']}:")
+    logger.info(f"[scan] - Symptoms: {len(matched_symptoms)}/{len(disease['symptoms'])} ({(len(matched_symptoms)/len(disease['symptoms'])*100 if disease['symptoms'] else 0):.1f}%)")
+    logger.info(f"[scan] - Lab Results: {len(matched_lab_results)}/{len(disease['labResults'])} ({(len(matched_lab_results)/len(disease['labResults'])*100 if disease['labResults'] else 0):.1f}%)")
+    logger.info(f"[scan] - Procedures: {len(matched_procedures)}/{len(disease['diagnosticProcedures'])} ({(len(matched_procedures)/len(disease['diagnosticProcedures'])*100 if disease['diagnosticProcedures'] else 0):.1f}%)")
+    logger.info(f"[scan] - Risk Factors: {len(matched_risk_factors)}/{len(disease['riskFactors'])} ({(len(matched_risk_factors)/len(disease['riskFactors'])*100 if disease['riskFactors'] else 0):.1f}%)")
+    logger.info(f"[scan] - Overall Confidence Score: {confidence:.1%}")
     
     analysis_time = time.time() - start_time
     logger.info(f"[scan] Disease analysis completed in {analysis_time:.2f} seconds")
