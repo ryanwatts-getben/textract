@@ -37,6 +37,10 @@ from llama_index.core import (
 from llama_index.llms.anthropic import Anthropic
 
 # Local imports
+from swagger_config import (
+    api, scrape_ns, scan_ns, scrape_request, scrape_response, 
+    scrape_multiple_response, error_response, scan_request, scan_response
+)
 from rag import create_index, preprocess_document
 from ragindex import process_user_projects
 from disease_definition_generator import generate_multiple_definitions, get_embedding_model
@@ -991,11 +995,12 @@ def scrape_disease_info():
 def begin_scan():
     """
     Endpoint to begin scanning documents for mass tort analysis.
-    Expects a JSON payload matching the ScanInput type.
+    Expects a JSON payload with user, project, and mass tort information.
     """
     try:
         data = request.get_json()
         if not data:
+            logger.error("[app] No JSON data provided")
             return jsonify({
                 'status': 'error',
                 'message': 'No JSON data provided'
@@ -1005,18 +1010,38 @@ def begin_scan():
         required_fields = ['userId', 'projectId', 'massTorts']
         missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
+            logger.error(f"[app] Missing required fields: {missing_fields}")
             return jsonify({
                 'status': 'error',
                 'message': f'Missing required fields: {", ".join(missing_fields)}'
             }), 400
 
-        # Process the scan
+        # Log the incoming data structure
+        logger.info(f"[app] Received scan request for user {data['userId']}, project {data['projectId']}")
+        logger.info(f"[app] Processing {len(data['massTorts'])} mass torts")
+
+        # Process each mass tort
+        for mass_tort in data['massTorts']:
+            logger.info(f"[app] Processing mass tort: {mass_tort['officialName']}")
+            logger.info(f"[app] Found {len(mass_tort['diseases'])} diseases to analyze")
+
+            # Process each disease
+            for disease in mass_tort['diseases']:
+                logger.info(f"[app] Analyzing disease: {disease['name']}")
+                logger.info(f"[app] Found {len(disease.get('symptoms', []))} symptoms")
+                logger.info(f"[app] Found {len(disease.get('labResults', []))} lab results")
+                logger.info(f"[app] Found {len(disease.get('diagnosticProcedures', []))} procedures")
+                logger.info(f"[app] Found {len(disease.get('riskFactors', []))} risk factors")
+
+        # Process the scan with the validated data
         result = scan_documents(data)
         
         # Return results
         if result['status'] == 'success':
+            logger.info("[app] Scan completed successfully")
             return jsonify(result), 200
         else:
+            logger.error(f"[app] Scan failed: {result.get('message', 'Unknown error')}")
             return jsonify(result), 500
 
     except Exception as e:

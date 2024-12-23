@@ -77,7 +77,7 @@ def scrape_medline_plus(url):
         url (str): The URL of the MedlinePlus page to scrape
         
     Returns:
-        dict: Dictionary containing page title, summary, and all sections with their content
+        dict: Dictionary containing structured medical information
     """
     try:
         # Validate URL
@@ -105,7 +105,16 @@ def scrape_medline_plus(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Initialize the result dictionary
-        result = {}
+        result = {
+            'symptoms': [],
+            'lab_results': [],
+            'diagnostic_procedures': [],
+            'treatments': [],
+            'risk_factors': [],
+            'complications': [],
+            'prevention': [],
+            'when_to_see_doctor': []
+        }
         
         # Get the page title
         title_elem = soup.find('h1', {'class': 'with-also'})
@@ -139,69 +148,49 @@ def scrape_medline_plus(url):
             if summary_text.strip():
                 result['summary'] = summary_text
         
-        # Initialize sections dict
-        sections = {}
-        
-        # Find all sections
+        # Process each section
         section_elements = soup.find_all('section')
-        
         for section in section_elements:
-            # Get section title
             title_elem = section.find(['h2', 'h3'])
             if not title_elem:
                 continue
                 
-            section_title = title_elem.get_text(strip=True)
-            if 'References and abstracts' in section_title:
-                section_title = 'Journal Articles'
-            
-            # Initialize section content
+            section_title = title_elem.get_text(strip=True).lower()
             section_content = []
             
             # Find the section body
             section_body = section.find('div', {'class': 'section-body'})
             if not section_body:
                 continue
-                
-            # Process bulletlist items if present
-            bulletlist = section_body.find('ul', {'class': 'bulletlist'})
-            if bulletlist:
-                for li in bulletlist.find_all('li', recursive=False):
-                    item_parts = []
-                    
-                    # Get main link and text
-                    main_link = li.find('a')
-                    if main_link:
-                        item_parts.append(main_link.get_text(strip=True))
-                    
-                    # Get description text
-                    desc = li.find('span', {'class': 'desc-text'})
-                    if desc:
-                        # Get organization info
-                        orgs = desc.find('span', {'class': 'orgs'})
-                        if orgs:
-                            item_parts.append(f"({orgs.get_text(strip=True)})")
-                        
-                        # Get document type (PDF, etc)
-                        doc_type = desc.find('span', {'class': 'desccode'})
-                        if doc_type:
-                            item_parts.append(f"[{doc_type.get_text(strip=True)}]")
-                    
-                    # Get "Also in Spanish" text
-                    also_lang = li.find('span', {'class': 'also-lang'})
-                    if also_lang:
-                        item_parts.append(also_lang.get_text(strip=True))
-                    
-                    if item_parts:
-                        section_content.append(' | '.join(item_parts))
             
-            # Add section content to result if not empty
-            if section_content:
-                sections[section_title] = '\n'.join(section_content)
+            # Extract bullet points
+            bullet_list = section_body.find('ul', {'class': 'bulletlist'})
+            if bullet_list:
+                for li in bullet_list.find_all('li', recursive=False):
+                    content = li.get_text(strip=True)
+                    if content:
+                        section_content.append(content)
+            
+            # Map section content to appropriate category
+            if 'symptom' in section_title or 'sign' in section_title:
+                result['symptoms'].extend(section_content)
+            elif 'test' in section_title or 'lab' in section_title:
+                result['lab_results'].extend(section_content)
+            elif 'diagnos' in section_title:
+                result['diagnostic_procedures'].extend(section_content)
+            elif 'treatment' in section_title or 'therap' in section_title:
+                result['treatments'].extend(section_content)
+            elif 'risk' in section_title or 'cause' in section_title:
+                result['risk_factors'].extend(section_content)
+            elif 'complication' in section_title:
+                result['complications'].extend(section_content)
+            elif 'prevent' in section_title:
+                result['prevention'].extend(section_content)
+            elif 'when to' in section_title or 'call' in section_title:
+                result['when_to_see_doctor'].extend(section_content)
         
-        # Only add sections dict if it's not empty
-        if sections:
-            result['sections'] = sections
+        # Remove empty lists from result
+        result = {k: v for k, v in result.items() if v}
         
         return result
     
