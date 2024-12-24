@@ -6,8 +6,12 @@ import tempfile
 import csv
 import io
 import shutil
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
+import numpy as np
+from dataclasses import dataclass
+import platform
+import pickle
 
 from flask import request, jsonify
 from pydantic import BaseModel, Field
@@ -167,10 +171,15 @@ def get_embedding_model(model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-s
     logger.info(f"[disease_definition_generator] Using device: {device} for embeddings")
 
     try:
-        # Set multiprocessing start method to 'fork' on Unix systems
-        if hasattr(torch.multiprocessing, 'set_start_method'):
+        # Set multiprocessing start method based on platform
+        if platform.system() != 'Windows' and hasattr(torch.multiprocessing, 'set_start_method'):
             try:
                 torch.multiprocessing.set_start_method('fork', force=True)
+            except RuntimeError:
+                pass  # Method already set
+        elif platform.system() == 'Windows' and hasattr(torch.multiprocessing, 'set_start_method'):
+            try:
+                torch.multiprocessing.set_start_method('spawn', force=True)
             except RuntimeError:
                 pass  # Method already set
 
@@ -206,231 +215,65 @@ def get_embedding_model(model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-s
         raise
 
 class DiseaseDefinitionEngine:
-    """Engine for generating disease definitions using LLM and embeddings."""
-    
-    # Class variables for singleton pattern
+    """Singleton class for disease definition generation and document scanning."""
     _instance = None
     _initialized = False
-    _embed_model = None
-    _embedding_dimension = None
-    _llm = None
-    _prompt_template = None
-    _index = None
 
     def __new__(cls):
-        """Create or return the singleton instance."""
         if cls._instance is None:
             logger.info("[disease_definition_generator] Creating new DiseaseDefinitionEngine instance")
             cls._instance = super(DiseaseDefinitionEngine, cls).__new__(cls)
-            cls._instance._initialize()
         return cls._instance
 
+    def __init__(self):
+        if not self._initialized:
+            logger.info("[disease_definition_generator] Initializing DiseaseDefinitionEngine")
+            try:
+                self._initialize()
+                DiseaseDefinitionEngine._initialized = True
+            except Exception as e:
+                logger.error(f"[disease_definition_generator] Engine initialization failed: {str(e)}")
+                raise
+
     def _initialize(self):
-        """Initialize the engine components if not already initialized."""
-        if self._initialized:
-            logger.debug("[disease_definition_generator] Using existing DiseaseDefinitionEngine instance")
-            return
-
-        logger.info("[disease_definition_generator] Initializing DiseaseDefinitionEngine")
+        """Initialize the engine components."""
         try:
-            # Load environment variables
-            self.ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
-            if not self.ANTHROPIC_API_KEY:
-                logger.error("[disease_definition_generator] ANTHROPIC_API_KEY environment variable is not set")
-                raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
-
-            # Initialize embedding model only if not already initialized
-            if self._embed_model is None:
-                self._embed_model, self._embedding_dimension = get_embedding_model()
-                logger.info(f"[disease_definition_generator] Embedding model initialized")
-                logger.info(f"[disease_definition_generator] Embedding dimension: {self._embedding_dimension}")
-
-            # Initialize LLM predictor only if not already initialized
-            if self._llm is None:
-                self._llm = Anthropic(
-                    api_key=self.ANTHROPIC_API_KEY,
-                    model="claude-3-5-sonnet-20241022",
-                    temperature=0,
-                    max_tokens=2000
-                )
-                logger.info("[disease_definition_generator] LLM predictor initialized with Claude")
-
-            # Configure settings
-            Settings.embed_model = self._embed_model
-            Settings.llm = self._llm
-            logger.info("[disease_definition_generator] Global settings configured")
-
-            # Initialize prompt template
-            self._prompt_template = (
-                "Please provide a detailed definition of the disease '{disease_name}' in the following JSON format. "
-                "Make sure to include all required fields and follow the exact format:\n\n"
-                "{{\n"
-                '  "name": "{disease_name}",\n'
-                '  "alternateNames": ["string"],\n'
-                '  "icd10": "A00.0",\n'
-                '  "isGlobal": true,\n'
-                '  "symptoms": [\n'
-                '    {{\n'
-                '      "name": "string",\n'
-                '      "commonality": "VERY_COMMON",\n'
-                '      "severity": "MILD"\n'
-                '    }}\n'
-                '  ],\n'
-                '  "labResults": [\n'
-                '    {{\n'
-                '      "name": "string",\n'
-                '      "unit": "string",\n'
-                '      "normalRange": "string",\n'
-                '      "significance": "string"\n'
-                '    }}\n'
-                '  ],\n'
-                '  "diagnosticProcedures": [\n'
-                '    {{\n'
-                '      "name": "string",\n'
-                '      "accuracy": 0.95,\n'
-                '      "invasiveness": "NON_INVASIVE"\n'
-                '    }}\n'
-                '  ],\n'
-                '  "treatments": [\n'
-                '    {{\n'
-                '      "name": "string",\n'
-                '      "type": "MEDICATION",\n'
-                '      "effectiveness": 0.85\n'
-                '    }}\n'
-                '  ],\n'
-                '  "prognosis": {{\n'
-                '    "survivalRate": 0.8,\n'
-                '    "chronicityLevel": "ACUTE",\n'
-                '    "qualityOfLifeImpact": "MILD"\n'
-                '  }}\n'
-                "}}\n\n"
-                "Please ensure the response is valid JSON and includes accurate medical information for {disease_name}. "
-                "The values should be based on current medical knowledge and research."
-            )
-            logger.info("[disease_definition_generator] Prompt template initialized")
-
-            self._initialized = True
-            logger.info("[disease_definition_generator] DiseaseDefinitionEngine initialized successfully")
-
+            # Initialize embedding model
+            self._embed_model, self._embedding_dimension = get_embedding_model()
+            logger.info("[disease_definition_generator] Engine initialized successfully")
         except Exception as e:
             logger.error(f"[disease_definition_generator] Engine initialization failed: {str(e)}")
             raise
 
-    @property
-    def embed_model(self):
-        """Get the embedding model."""
+    def scan_documents(self, documents: List[str], disease_criteria: Dict) -> Dict:
+        """
+        Scan documents for disease criteria using the new scoring system.
+        """
+        try:
+            # Perform the scan using the new scoring system
+            scan_results = scan_for_disease(documents, disease_criteria, self._embed_model)
+            
+            # Format the response
+            response = format_scan_response(
+                scan_results=scan_results,
+                mass_tort_name=disease_criteria.get('mass_tort_name', 'Unknown Mass Tort'),
+                disease_name=disease_criteria.get('disease_name', 'Unknown Disease')
+            )
+            
+            logger.info(f"[disease_definition_generator] Document scan completed with confidence: {scan_results['overall_confidence']}")
+            return response
+
+        except Exception as e:
+            logger.error(f"[disease_definition_generator] Error scanning documents: {str(e)}")
+            raise
+
+    def get_embedding_model(self):
+        """Return the initialized embedding model."""
         return self._embed_model
 
-    @property
-    def embedding_dimension(self):
-        """Get the embedding dimension."""
+    def get_embedding_dimension(self):
+        """Return the embedding dimension."""
         return self._embedding_dimension
-
-    @property
-    def llm(self):
-        """Get the LLM model."""
-        return self._llm
-
-    @property
-    def prompt_template(self):
-        """Get the prompt template."""
-        return self._prompt_template
-
-    def load_index(self) -> Optional[VectorStoreIndex]:
-        """Load the index from storage if it exists."""
-        try:
-            # S3 bucket and path configuration
-            BUCKET_NAME = "generate-input-f5bef08a-9228-4f8c-a550-56d842b94088"
-            INDEX_KEY = "00000/22222/index.pkl"
-            
-            # Create a temporary directory for downloading the index
-            temp_dir = tempfile.mkdtemp()
-            temp_index_path = os.path.join(temp_dir, 'index.pkl')
-            
-            try:
-                # Download index from S3
-                logger.info(f"[disease_definition_generator] Attempting to load index from s3://{BUCKET_NAME}/{INDEX_KEY}")
-                s3_client = boto3.client('s3')
-                s3_client.download_file(BUCKET_NAME, INDEX_KEY, temp_index_path)
-                
-                # Check CUDA availability
-                import torch
-                if not torch.cuda.is_available():
-                    logger.info("[disease_definition_generator] CUDA not available, using CPU")
-                    # Load with CPU mapping
-                    index = torch.load(temp_index_path, map_location='cpu')
-                else:
-                    # Load normally
-                    index = torch.load(temp_index_path)
-                    
-                logger.info("[disease_definition_generator] Index loaded successfully from S3")
-                return index
-                
-            except ClientError as e:
-                if e.response['Error']['Code'] == '404':
-                    logger.warning("[disease_definition_generator] Index file not found in S3")
-                else:
-                    logger.error(f"[disease_definition_generator] Error accessing S3: {str(e)}")
-                return None
-                
-            finally:
-                # Clean up temporary directory
-                shutil.rmtree(temp_dir, ignore_errors=True)
-
-        except Exception as e:
-            logger.error(f"[disease_definition_generator] Error loading index: {str(e)}")
-            return None
-
-    def get_index(self) -> Optional[VectorStoreIndex]:
-        """Get the index, loading it if necessary."""
-        if self._index is None:
-            self._index = self.load_index()
-        return self._index
-
-    def generate_definition(self, disease_name: str) -> DiseaseDefinition:
-        """Generates a structured definition for a given disease"""
-        try:
-            logger.info(f"[disease_definition_generator] Generating definition for: {disease_name}")
-
-            # Format the prompt with the disease name
-            formatted_prompt = self.prompt_template.format(disease_name=disease_name)
-            
-            # Get response either from index or directly from LLM
-            index = self.get_index()
-            if index is not None:
-                logger.info("[disease_definition_generator] Using index for query")
-                query_engine = index.as_query_engine(
-                    llm=Settings.llm,
-                    response_mode="compact",
-                    similarity_top_k=3,
-                    verbose=True
-                )
-                response = query_engine.query(formatted_prompt)
-                response_text = response.response
-            else:
-                logger.info("[disease_definition_generator] Index not available, querying LLM directly")
-                response_text = Settings.llm.complete(formatted_prompt).text
-
-            # Parse the response into our Pydantic model
-            try:
-                # Attempt to parse the response as JSON
-                logger.debug(f"[disease_definition_generator] Raw response: {response_text}")
-                definition_dict = json.loads(response_text)
-                definition = DiseaseDefinition(**definition_dict)
-                logger.info(f"[disease_definition_generator] Successfully generated definition for {disease_name}")
-                return definition
-
-            except json.JSONDecodeError as e:
-                logger.error(f"[disease_definition_generator] Failed to parse response as JSON: {str(e)}")
-                logger.error(f"[disease_definition_generator] Raw response: {response_text}")
-                raise ValueError(f"Invalid response format: {str(e)}")
-            except Exception as e:
-                logger.error(f"[disease_definition_generator] Failed to create DiseaseDefinition: {str(e)}")
-                raise ValueError(f"Failed to create disease definition: {str(e)}")
-
-        except Exception as e:
-            logger.error(f"[disease_definition_generator] Error generating definition for {disease_name}: {str(e)}")
-            raise
 
 # Initialize the engine at startup (but don't load index yet)
 try:
@@ -468,3 +311,405 @@ def generate_multiple_definitions(disease_names: List[str]) -> Dict[str, Any]:
             results[disease] = {'error': str(e)}
 
     return results
+
+@dataclass
+class FindingMatch:
+    """Represents a matched finding in a document with confidence scoring."""
+    text: str  # The matched text from the document
+    score: float  # Confidence score (0-1)
+    finding_type: str  # 'symptom', 'lab_result', 'procedure', 'risk_factor'
+    finding_name: str  # The actual name of the finding that matched
+    document: str  # Source document name/id
+    page: int  # Page number where the match was found
+    source_type: str  # Type of document (e.g., 'medical_record', 'incident_report')
+
+def determine_source_type(document_name: str) -> str:
+    """Determine the source type based on the document name."""
+    document_name_lower = document_name.lower()
+    if any(term in document_name_lower for term in ['report', 'assessment', 'record', 'note']):
+        return 'medical_record'
+    elif 'incident' in document_name_lower:
+        return 'incident_report'
+    else:
+        return 'other'
+
+def calculate_category_scores(matches: List[FindingMatch], threshold: float) -> Dict[str, float]:
+    """Calculate average scores for each category of findings, only using scores above threshold."""
+    category_scores = {}
+    for category in ['symptoms', 'lab_results', 'procedures', 'risk_factors']:
+        # Only use matches above threshold
+        valid_matches = [m for m in matches if m.finding_type == category and m.score >= threshold]
+        if valid_matches:
+            category_scores[category] = sum(m.score for m in valid_matches) / len(valid_matches)
+        else:
+            category_scores[category] = 0.0
+    return category_scores
+
+def create_scoring_summary(matches: List[FindingMatch], disease_criteria: Dict) -> Dict:
+    """Create a detailed scoring summary."""
+    threshold = disease_criteria.get('scoring_model', {}).get('confidence_threshold', 0.7)
+    weights = disease_criteria.get('scoring_model', {}).get('weights', {
+        'symptoms': 0.4,
+        'lab_results': 0.3,
+        'procedures': 0.2,
+        'risk_factors': 0.1
+    })
+    
+    # Calculate category scores using only findings above threshold
+    category_scores = calculate_category_scores(matches, threshold)
+    
+    return {
+        'total_findings': len(matches),
+        'findings_above_threshold': len([m for m in matches if m.score >= threshold]),
+        'threshold': threshold,
+        'weights': weights,
+        'category_scores': category_scores
+    }
+
+def split_into_chunks(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[Dict[str, Any]]:
+    """
+    Split document text into overlapping chunks for better context preservation.
+    Returns list of chunks with their metadata.
+    """
+    words = text.split()
+    chunks = []
+    
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk_words = words[i:i + chunk_size]
+        chunk_text = ' '.join(chunk_words)
+        
+        # Calculate the page number (this should be replaced with actual page tracking)
+        estimated_page = (i // 3000) + 1  # Rough estimate, should be replaced with actual page numbers
+        
+        chunks.append({
+            'text': chunk_text,
+            'start_idx': i,
+            'end_idx': i + len(chunk_words),
+            'page': estimated_page
+        })
+    
+    return chunks
+
+def score_finding(text: str, finding: str, finding_type: str, document_info: Dict[str, Any], embed_model: Any) -> FindingMatch:
+    """Score an individual finding against a piece of text using the provided embedding model."""
+    try:
+        # Normalize text and finding
+        text_lower = text.lower()
+        finding_lower = finding.lower()
+
+        # Check for exact or near-exact matches first
+        if finding_lower in text_lower:
+            confidence = 1.0
+            matched_text = text[text_lower.find(finding_lower):text_lower.find(finding_lower) + len(finding_lower)]
+            logger.debug(f"[disease_definition_generator] Exact match found for '{finding}' with confidence: 1.0")
+        else:
+            # Get embeddings for both text and finding
+            text_embedding = embed_model.get_text_embedding(text_lower)
+            finding_embedding = embed_model.get_text_embedding(finding_lower)
+
+            # Convert to numpy arrays for calculation
+            text_embedding_np = np.array(text_embedding)
+            finding_embedding_np = np.array(finding_embedding)
+
+            # Calculate cosine similarity
+            confidence = float(np.dot(text_embedding_np, finding_embedding_np) / 
+                         (np.linalg.norm(text_embedding_np) * np.linalg.norm(finding_embedding_np)))
+            
+            # Find the best matching context
+            words = text.split()
+            best_context = text
+            if len(words) > 20:  # If text is long, find the most relevant context
+                for i in range(len(words) - 10):
+                    context = ' '.join(words[i:i+20])
+                    context_embedding = embed_model.get_text_embedding(context.lower())
+                    context_similarity = float(np.dot(np.array(context_embedding), finding_embedding_np) / 
+                                         (np.linalg.norm(np.array(context_embedding)) * np.linalg.norm(finding_embedding_np)))
+                    if context_similarity > confidence:
+                        confidence = context_similarity
+                        best_context = context
+
+            matched_text = best_context
+
+        # Apply type-specific boosts
+        if finding_type == 'procedures' and any(proc.lower() in text_lower for proc in ['mri', 'ct scan', 'eeg', 'examination']):
+            confidence = min(1.0, confidence * 1.2)
+        elif finding_type == 'lab_results' and any(term in text_lower for term in ['test', 'level', 'count', 'scale']):
+            confidence = min(1.0, confidence * 1.15)
+
+        logger.debug(f"[disease_definition_generator] Scored finding '{finding}' with confidence: {confidence}")
+
+        return FindingMatch(
+            text=matched_text,
+            score=confidence,
+            finding_type=finding_type,
+            finding_name=finding,
+            document=document_info.get('name', 'Unknown Document'),
+            page=document_info.get('page', 1),
+            source_type=determine_source_type(document_info.get('name', ''))
+        )
+    except Exception as e:
+        logger.error(f"[disease_definition_generator] Error scoring finding: {str(e)}")
+        raise
+
+def calculate_overall_confidence(matches: List[FindingMatch], disease_criteria: Dict) -> float:
+    """Calculate overall disease confidence based on weighted finding scores."""
+    try:
+        threshold = disease_criteria.get('scoring_model', {}).get('confidence_threshold', 0.7)
+        weights = disease_criteria.get('scoring_model', {}).get('weights', {
+            'symptoms': 0.4,
+            'lab_results': 0.3,
+            'procedures': 0.2,
+            'risk_factors': 0.1
+        })
+
+        # Calculate category scores using only findings above threshold
+        category_scores = calculate_category_scores(matches, threshold)
+
+        # Calculate weighted overall score
+        overall_score = sum(
+            category_scores[category] * weight
+            for category, weight in weights.items()
+        )
+
+        logger.info(f"[disease_definition_generator] Category scores: {category_scores}")
+        logger.info(f"[disease_definition_generator] Overall confidence: {overall_score}")
+
+        return overall_score
+
+    except Exception as e:
+        logger.error(f"[disease_definition_generator] Error calculating overall confidence: {str(e)}")
+        raise
+
+def scan_for_disease(documents: List[Dict[str, Any]], disease_criteria: Dict, embed_model: Any) -> Dict:
+    """Scan documents for disease criteria and return detailed match information."""
+    try:
+        matches = []
+        characteristics = {
+            'symptoms': [],
+            'lab_results': [],
+            'procedures': [],
+            'risk_factors': []
+        }
+
+        # Process each type of finding
+        for finding_type in ['symptoms', 'lab_results', 'procedures', 'risk_factors']:
+            findings = disease_criteria.get(finding_type, [])
+            for finding in findings:
+                best_match = None
+                best_score = 0.0
+
+                for doc in documents:
+                    doc_info = {
+                        'name': doc.get('name', 'Unknown Document'),
+                        'page': doc.get('page', 1)
+                    }
+
+                    # Split document into smaller chunks for more accurate matching
+                    chunks = split_into_chunks(doc['text'], chunk_size=500, overlap=100)
+                    
+                    for chunk in chunks:
+                        match = score_finding(
+                            chunk['text'], 
+                            finding, 
+                            finding_type, 
+                            {'name': doc_info['name'], 'page': chunk['page']},
+                            embed_model
+                        )
+                        if match.score > best_score:
+                            best_score = match.score
+                            best_match = match
+
+                if best_match:
+                    matches.append(best_match)
+                    characteristics[finding_type].append({
+                        'name': finding,
+                        'confidence': round(best_match.score * 100, 1),  # Convert to percentage
+                        'text': best_match.text,
+                        'document': best_match.document,
+                        'page': best_match.page
+                    })
+
+        # Calculate overall confidence using only matches above threshold
+        threshold = disease_criteria.get('scoring_model', {}).get('confidence_threshold', 0.7)
+        valid_matches = [m for m in matches if m.score >= threshold]
+        
+        # Calculate category scores
+        category_scores = calculate_category_scores(matches, threshold)
+        
+        # Calculate overall confidence
+        weights = disease_criteria.get('scoring_model', {}).get('weights', {
+            'symptoms': 0.4,
+            'lab_results': 0.3,
+            'procedures': 0.2,
+            'risk_factors': 0.1
+        })
+        
+        overall_confidence = sum(
+            category_scores[cat] * weight
+            for cat, weight in weights.items()
+        )
+
+        results = {
+            'matches': matches,
+            'characteristics': characteristics,
+            'overall_confidence': round(overall_confidence * 100, 1),  # Convert to percentage
+            'disease_criteria': disease_criteria,
+            'category_scores': {
+                cat: round(score * 100, 1)  # Convert to percentage
+                for cat, score in category_scores.items()
+            }
+        }
+
+        logger.info(f"[disease_definition_generator] Completed disease scan with {len(matches)} matches")
+        logger.info(f"[disease_definition_generator] Found {len(valid_matches)} matches above threshold")
+        logger.info(f"[disease_definition_generator] Overall confidence: {results['overall_confidence']}%")
+        
+        return results
+
+    except Exception as e:
+        logger.error(f"[disease_definition_generator] Error in disease scan: {str(e)}")
+        raise
+
+def format_scan_response(scan_results: Dict, mass_tort_name: str, disease_name: str) -> Dict:
+    """Format scan results for frontend consumption with exact structure match."""
+    try:
+        matches = scan_results['matches']
+        characteristics = scan_results['characteristics']
+        
+        # Create the response structure
+        response = {
+            'status': 'success',
+            'results': [{
+                'mass_tort_name': mass_tort_name,
+                'diseases': [{
+                    'disease_name': disease_name,
+                    'overall_confidence': scan_results['overall_confidence'],
+                    'matches': [
+                        {
+                            'finding_type': match.finding_type,
+                            'finding_name': match.finding_name,
+                            'text': match.text,
+                            'score': match.score,
+                            'document': match.document,
+                            'page': match.page,
+                            'source_type': match.source_type
+                        } for match in matches
+                    ],
+                    'characteristics': characteristics,
+                    'scoring_summary': create_scoring_summary(matches, scan_results.get('disease_criteria', {}))
+                }]
+            }]
+        }
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"[disease_definition_generator] Error formatting scan response: {str(e)}")
+        raise
+
+def create_index(documents: List[Document], cache_dir: Optional[str] = None) -> VectorStoreIndex:
+    """Create a new vector store index from the provided documents."""
+    try:
+        logger.info(f"[create_index] Starting index creation with {len(documents)} documents.")
+        
+        # Initialize embedding model
+        embed_model = get_embedding_model()
+        logger.info("[create_index] Creating VectorStoreIndex with provided documents")
+        
+        # Create the index
+        index = VectorStoreIndex.from_documents(
+            documents,
+            embed_model=embed_model,
+            show_progress=True
+        )
+        logger.info("[create_index] VectorStoreIndex created successfully")
+
+        # Cache the index locally if cache_dir is provided
+        if cache_dir:
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_path = os.path.join(cache_dir, 'vector_index.pkl')
+                
+                # Save locally first
+                with open(cache_path, 'wb') as f:
+                    pickle.dump(index, f)
+                logger.info("[create_index] Created and cached new vector index locally")
+
+                # Upload to S3 if configured
+                try:
+                    s3_client = boto3.client('s3')
+                    bucket_name = os.getenv('AWS_UPLOAD_BUCKET_NAME')
+                    if bucket_name:
+                        s3_client.upload_file(cache_path, bucket_name, '00000/22222/index.pkl')
+                        logger.info("[create_index] Index uploaded to S3 successfully")
+                except Exception as s3_error:
+                    logger.error(f"[create_index] Error uploading to S3: {str(s3_error)}")
+                    # Continue even if S3 upload fails
+                
+            except Exception as cache_error:
+                logger.error(f"[create_index] Error caching index: {str(cache_error)}")
+                # Continue even if caching fails
+        
+        logger.info("[create_index] Index creation completed, proceeding with document scanning")
+        return index
+
+    except Exception as e:
+        logger.error(f"[create_index] Error creating index: {str(e)}")
+        raise
+
+def scan_documents(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Scan documents for disease criteria.
+    """
+    try:
+        logger.info("[disease_definition_generator] Starting document scan")
+        
+        # Extract necessary data
+        documents = data.get('documents', [])
+        disease_criteria = data.get('disease_criteria', {})
+        
+        if not documents:
+            logger.error("[disease_definition_generator] No documents provided for scanning")
+            return {
+                'status': 'error',
+                'message': 'No documents provided for scanning'
+            }
+            
+        # Create or load index
+        try:
+            index = create_index(documents)
+            logger.info("[disease_definition_generator] Index ready for scanning")
+        except Exception as e:
+            logger.error(f"[disease_definition_generator] Error preparing index: {str(e)}")
+            return {
+                'status': 'error',
+                'message': f'Error preparing document index: {str(e)}'
+            }
+        
+        # Perform the scan using the index
+        try:
+            scan_results = scan_for_disease(documents, disease_criteria, index.embed_model)
+            logger.info("[disease_definition_generator] Document scan completed successfully")
+            
+            # Format the response
+            response = format_scan_response(
+                scan_results=scan_results,
+                mass_tort_name=disease_criteria.get('mass_tort_name', 'Unknown Mass Tort'),
+                disease_name=disease_criteria.get('disease_name', 'Unknown Disease')
+            )
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"[disease_definition_generator] Error during document scan: {str(e)}")
+            return {
+                'status': 'error',
+                'message': f'Error scanning documents: {str(e)}'
+            }
+            
+    except Exception as e:
+        logger.error(f"[disease_definition_generator] Error in scan_documents: {str(e)}")
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
