@@ -199,7 +199,7 @@ def extract_text_from_file(content: bytes, file_extension: str) -> str:
                 
         elif file_extension == '.docx':
             with io.BytesIO(content) as docx_buffer:
-                doc = DocxDocument(docx_buffer)
+                doc = Document(docx_buffer)
                 return '\n'.join(paragraph.text for paragraph in doc.paragraphs)
                 
         elif file_extension == '.csv':
@@ -841,39 +841,39 @@ def extract_text_from_docx(content: bytes) -> str:
     """Extract text from DOCX content."""
     try:
         with io.BytesIO(content) as docx_file:
-            doc = DocxDocument(docx_file)
+            doc = Document(docx_file)
             return '\n'.join(paragraph.text for paragraph in doc.paragraphs)
     except Exception as e:
         logger.error(f"[app] Error extracting text from DOCX: {str(e)}")
         return ""
 
-def extract_text_from_xml(content: bytes) -> str:
-    """Extract text from XML content."""
-    try:
-        root = DefusedET.fromstring(content.decode('utf-8', errors='ignore'))
-        text_content = []
+# def extract_text_from_xml(content: bytes) -> str:
+#     """Extract text from XML content."""
+#     try:
+#         root = DefusedET.fromstring(content.decode('utf-8', errors='ignore'))
+#         text_content = []
         
-        def extract_text_from_element(element, path=""):
-            current_path = f"{path}/{element.tag}" if path else element.tag
+#         def extract_text_from_element(element, path=""):
+#             current_path = f"{path}/{element.tag}" if path else element.tag
             
-            # Add element text if present
-            if element.text and element.text.strip():
-                text_content.append(f"{current_path}: {element.text.strip()}")
+#             # Add element text if present
+#             if element.text and element.text.strip():
+#                 text_content.append(f"{current_path}: {element.text.strip()}")
             
-            # Process attributes
-            for key, value in element.attrib.items():
-                text_content.append(f"{current_path}[@{key}]: {value}")
+#             # Process attributes
+#             for key, value in element.attrib.items():
+#                 text_content.append(f"{current_path}[@{key}]: {value}")
             
-            # Process child elements
-            for child in element:
-                extract_text_from_element(child, current_path)
+#             # Process child elements
+#             for child in element:
+#                 extract_text_from_element(child, current_path)
         
-        extract_text_from_element(root)
-        return '\n'.join(text_content)
+#         extract_text_from_element(root)
+#         return '\n'.join(text_content)
         
-    except Exception as e:
-        logger.error(f"[app] Error extracting text from XML: {str(e)}")
-        return ""
+#     except Exception as e:
+#         logger.error(f"[app] Error extracting text from XML: {str(e)}")
+#         return ""
 
 def extract_text_from_csv(content: bytes) -> str:
     """Extract text from CSV content."""
@@ -1051,6 +1051,81 @@ def begin_scan():
             'message': str(e)
         }), 500
 
+@app.route('/api/disease-scanner/reports/generate-report', methods=['POST'])
+def generate_report():
+    """Generate a report based on the provided data."""
+    try:
+        data = request.json
+        logger.info(f"[app] Generating report with data: {json.dumps(data, indent=2)}")
+        
+        # Extract required fields
+        user_id = data.get('userId')
+        project_id = data.get('projectId')
+        mass_tort_id = data.get('massTortId')
+        diseases = data.get('diseases', [])
+        
+        if not all([user_id, project_id, mass_tort_id, diseases]):
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required fields: userId, projectId, massTortId, or diseases'
+            }), 400
+            
+        # Call scan_documents to process the diseases
+        scan_input = {
+            'userId': user_id,
+            'projectId': project_id,
+            'massTorts': [{
+                'id': mass_tort_id,
+                'diseases': diseases
+            }]
+        }
+        
+        scan_results = scan_documents(scan_input)
+        
+        if scan_results.get('status') == 'success':
+            return jsonify(scan_results), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': scan_results.get('message', 'Failed to generate report')
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"[app] Error generating report: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
 if __name__ == '__main__':
-    logger.info(f"[app] Starting Flask app on {SERVER_CONFIG['host']}:{SERVER_CONFIG['port']}")
-    app.run(host=SERVER_CONFIG['host'], port=SERVER_CONFIG['port'])
+    # Initialize multiprocessing support
+    import multiprocessing
+    if hasattr(multiprocessing, 'set_start_method'):
+        try:
+            multiprocessing.set_start_method('fork')
+        except RuntimeError:
+            pass  # Method already set
+    multiprocessing.freeze_support()
+    
+    # Configure logging
+    logging.basicConfig(
+        level=getattr(logging, LOG_CONFIG["level"]),
+        format=LOG_CONFIG["format"]
+    )
+    logger = logging.getLogger(__name__)
+    
+    # Initialize the embedding model before starting the server
+    try:
+        from disease_definition_generator import DiseaseDefinitionEngine
+        engine = DiseaseDefinitionEngine()
+        logger.info("[app] Successfully initialized DiseaseDefinitionEngine")
+    except Exception as e:
+        logger.error(f"[app] Error initializing DiseaseDefinitionEngine: {str(e)}")
+        raise
+    
+    # Start the Flask app
+    app.run(
+        host=SERVER_CONFIG['host'],
+        port=SERVER_CONFIG['port'],
+        debug=False  # Set to False to avoid multiprocessing issues
+    )

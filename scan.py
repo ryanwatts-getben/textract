@@ -181,129 +181,125 @@ def query_index(index: VectorStoreIndex, query: str) -> Dict:
         logger.error(f"[scan] Error querying index: {str(e)}")
         return {'response': '', 'relevantExcerpts': []}
 
-def analyze_disease(index: VectorStoreIndex, disease: Disease, mass_tort: MassTort) -> ScanResult:
-    """Analyze a single disease against the index."""
-    start_time = time.time()
-    logger.info(f"[scan] Starting analysis of disease '{disease['name']}' for mass tort '{mass_tort['officialName']}'")
-    
-    # Log disease characteristics in detail
-    logger.info(f"[scan] Disease characteristics for {disease['name']}:")
-    
-    # Log symptoms
-    symptoms = [s['name'] for s in disease['symptoms']]
-    logger.info(f"[scan] Symptoms ({len(symptoms)}):")
-    for symptom in symptoms:
-        logger.info(f"[scan]   - {symptom}")
-    
-    # Log lab results
-    lab_results = [f"{l['name']} ({l['range']})" for l in disease['labResults']]
-    logger.info(f"[scan] Lab Results ({len(lab_results)}):")
-    for lab_result in lab_results:
-        logger.info(f"[scan]   - {lab_result}")
-    
-    # Log diagnostic procedures
-    procedures = [p['name'] for p in disease['diagnosticProcedures']]
-    logger.info(f"[scan] Diagnostic Procedures ({len(procedures)}):")
-    for procedure in procedures:
-        logger.info(f"[scan]   - {procedure}")
-    
-    # Log risk factors
-    risk_factors = [r['name'] for r in disease['riskFactors']]
-    logger.info(f"[scan] Risk Factors ({len(risk_factors)}):")
-    for risk_factor in risk_factors:
-        logger.info(f"[scan]   - {risk_factor}")
-    
-    # Build query from disease details
-    query_parts = [
-        f"Find evidence related to {disease['name']} with the following characteristics:",
-        "Symptoms: " + ", ".join(symptoms) if symptoms else "No symptoms specified",
-        "Lab Results: " + ", ".join(lab_results) if lab_results else "No lab results specified",
-        "Diagnostic Procedures: " + ", ".join(procedures) if procedures else "No procedures specified",
-        "Risk Factors: " + ", ".join(risk_factors) if risk_factors else "No risk factors specified"
-    ]
-    query = "\n".join(query_parts)
-    logger.debug(f"[scan] Generated query:\n{query}")
-    
-    # Query the index
-    logger.info("[scan] Querying index for disease evidence")
-    result = query_index(index, query)
-    
-    # Analyze matches
-    logger.info("[scan] Analyzing matches in response")
-    matched_symptoms = []
-    matched_lab_results = []
-    matched_procedures = []
-    matched_risk_factors = []
-    
-    response_text = result['response'].lower()
-    
-    # Process symptoms
-    logger.info("[scan] Processing symptom matches")
-    for symptom in disease['symptoms']:
-        if symptom['name'].lower() in response_text:
-            matched_symptoms.append(symptom['name'])
-            logger.info(f"[scan] ✓ Matched symptom: {symptom['name']}")
+def analyze_disease(disease: Dict, index: VectorStoreIndex, mass_tort_name: str) -> Dict:
+    """Analyze a single disease against the document index."""
+    try:
+        logger.info(f"[scan] Starting analysis of disease '{disease.get('name', '')}' for mass tort '{mass_tort_name}'")
+        
+        # Ensure disease is a dictionary and has required fields
+        if not isinstance(disease, dict):
+            raise ValueError("Disease must be a dictionary")
+
+        disease_name = disease.get('name')
+        if not disease_name:
+            raise ValueError("Disease must have a name")
+
+        # Log the raw data for debugging
+        logger.debug(f"[scan] Raw disease data: {json.dumps(disease, indent=2)}")
+
+        # Extract and validate disease characteristics
+        symptoms = disease.get('symptoms', [])
+        lab_results = disease.get('labResults', [])
+        procedures = disease.get('diagnosticProcedures', [])
+        risk_factors = disease.get('riskFactors', [])
+
+        logger.info(f"[scan] Processing disease characteristics for {disease_name}:")
+        logger.info(f"[scan] - Symptoms: {len(symptoms)}")
+        logger.info(f"[scan] - Lab Results: {len(lab_results)}")
+        logger.info(f"[scan] - Procedures: {len(procedures)}")
+        logger.info(f"[scan] - Risk Factors: {len(risk_factors)}")
+
+        # Extract names safely, handling both dictionary and string formats
+        def safe_get_name(item) -> Optional[str]:
+            if isinstance(item, dict):
+                name = item.get('name', '').strip()
+                return name if name else None
+            elif isinstance(item, str):
+                name = item.strip()
+                return name if name else None
+            elif isinstance(item, set):
+                # Convert set to string and clean it
+                name = str(item).strip('{}').strip()
+                return name if name else None
+            else:
+                logger.warning(f"[scan] Unexpected item type: {type(item)}")
+                return None
+
+        # Extract names from each category and filter out None/empty values
+        symptom_names = [name for s in symptoms if (name := safe_get_name(s))]
+        lab_result_names = [name for l in lab_results if (name := safe_get_name(l))]
+        procedure_names = [name for p in procedures if (name := safe_get_name(p))]
+        risk_factor_names = [name for r in risk_factors if (name := safe_get_name(r))]
+
+        # Log extracted names for debugging
+        logger.debug(f"[scan] Extracted symptom names: {symptom_names}")
+        logger.debug(f"[scan] Extracted lab result names: {lab_result_names}")
+        logger.debug(f"[scan] Extracted procedure names: {procedure_names}")
+        logger.debug(f"[scan] Extracted risk factor names: {risk_factor_names}")
+
+        # Build search queries with proper formatting
+        queries = []
+        if symptom_names:
+            formatted_symptoms = ', '.join(f'"{s}"' for s in symptom_names)
+            queries.append(f"symptoms including {formatted_symptoms}")
+        if lab_result_names:
+            formatted_labs = ', '.join(f'"{l}"' for l in lab_result_names)
+            queries.append(f"lab results including {formatted_labs}")
+        if procedure_names:
+            formatted_procedures = ', '.join(f'"{p}"' for p in procedure_names)
+            queries.append(f"procedures including {formatted_procedures}")
+        if risk_factor_names:
+            formatted_risks = ', '.join(f'"{r}"' for r in risk_factor_names)
+            queries.append(f"risk factors including {formatted_risks}")
+
+        # Combine queries with proper context
+        if queries:
+            combined_query = f"Find evidence related to {disease_name} with the following characteristics: " + " AND ".join(queries)
         else:
-            logger.debug(f"[scan] ✗ No match for symptom: {symptom['name']}")
+            combined_query = f"Find evidence related to {disease_name}"
             
-    # Process lab results
-    logger.info("[scan] Processing lab result matches")
-    for lab_result in disease['labResults']:
-        result_str = f"{lab_result['name']} ({lab_result['range']})"
-        if lab_result['name'].lower() in response_text:
-            matched_lab_results.append(result_str)
-            logger.info(f"[scan] ✓ Matched lab result: {result_str}")
-        else:
-            logger.debug(f"[scan] ✗ No match for lab result: {result_str}")
-            
-    # Process procedures
-    logger.info("[scan] Processing diagnostic procedure matches")
-    for procedure in disease['diagnosticProcedures']:
-        if procedure['name'].lower() in response_text:
-            matched_procedures.append(procedure['name'])
-            logger.info(f"[scan] ✓ Matched procedure: {procedure['name']}")
-        else:
-            logger.debug(f"[scan] ✗ No match for procedure: {procedure['name']}")
-            
-    # Process risk factors
-    logger.info("[scan] Processing risk factor matches")
-    for risk_factor in disease['riskFactors']:
-        if risk_factor['name'].lower() in response_text:
-            matched_risk_factors.append(risk_factor['name'])
-            logger.info(f"[scan] ✓ Matched risk factor: {risk_factor['name']}")
-        else:
-            logger.debug(f"[scan] ✗ No match for risk factor: {risk_factor['name']}")
-    
-    # Calculate confidence
-    total_items = len(disease['symptoms']) + len(disease['labResults']) + \
-                 len(disease['diagnosticProcedures']) + len(disease['riskFactors'])
-    matched_items = len(matched_symptoms) + len(matched_lab_results) + \
-                   len(matched_procedures) + len(matched_risk_factors)
-    confidence = matched_items / total_items if total_items > 0 else 0.0
-    
-    # Log match summary with percentages
-    logger.info(f"[scan] Match summary for {disease['name']}:")
-    logger.info(f"[scan] - Symptoms: {len(matched_symptoms)}/{len(disease['symptoms'])} ({(len(matched_symptoms)/len(disease['symptoms'])*100 if disease['symptoms'] else 0):.1f}%)")
-    logger.info(f"[scan] - Lab Results: {len(matched_lab_results)}/{len(disease['labResults'])} ({(len(matched_lab_results)/len(disease['labResults'])*100 if disease['labResults'] else 0):.1f}%)")
-    logger.info(f"[scan] - Procedures: {len(matched_procedures)}/{len(disease['diagnosticProcedures'])} ({(len(matched_procedures)/len(disease['diagnosticProcedures'])*100 if disease['diagnosticProcedures'] else 0):.1f}%)")
-    logger.info(f"[scan] - Risk Factors: {len(matched_risk_factors)}/{len(disease['riskFactors'])} ({(len(matched_risk_factors)/len(disease['riskFactors'])*100 if disease['riskFactors'] else 0):.1f}%)")
-    logger.info(f"[scan] - Overall Confidence Score: {confidence:.1%}")
-    
-    analysis_time = time.time() - start_time
-    logger.info(f"[scan] Disease analysis completed in {analysis_time:.2f} seconds")
-    
-    return ScanResult(
-        diseaseId=disease['id'],
-        diseaseName=disease['name'],
-        massTortId=mass_tort['id'],
-        massTortName=mass_tort['officialName'],
-        matchedSymptoms=matched_symptoms,
-        matchedLabResults=matched_lab_results,
-        matchedProcedures=matched_procedures,
-        matchedRiskFactors=matched_risk_factors,
-        confidence=confidence,
-        relevantExcerpts=result['relevantExcerpts']
-    )
+        logger.info(f"[scan] Generated query: {combined_query}")
+
+        # Query the index
+        query_engine = index.as_query_engine()
+        response = query_engine.query(combined_query)
+
+        # Process response
+        matches = []
+        if hasattr(response, 'source_nodes'):
+            for node in response.source_nodes:
+                match = {
+                    'text': node.text,
+                    'score': float(node.score) if hasattr(node, 'score') else 0.0,
+                    'document': node.metadata.get('file_name', 'Unknown')
+                }
+                matches.append(match)
+
+        logger.info(f"[scan] Found {len(matches)} matches for {disease_name}")
+
+        # Return analysis results
+        return {
+            'disease_name': disease_name,
+            'matches': matches,
+            'query': combined_query,
+            'total_matches': len(matches),
+            'characteristics': {
+                'symptoms': symptom_names,
+                'lab_results': lab_result_names,
+                'procedures': procedure_names,
+                'risk_factors': risk_factor_names
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"[scan] Error analyzing disease {disease.get('name', 'Unknown')}: {str(e)}")
+        logger.error(f"[scan] Error details:", exc_info=True)
+        return {
+            'disease_name': disease.get('name', 'Unknown'),
+            'error': str(e),
+            'matches': [],
+            'total_matches': 0
+        }
 
 def store_scan_results(user_id: str, project_id: str, mass_tort_id: str, disease_id: str, results: ScanResult):
     """Store scan results in S3."""
@@ -322,125 +318,167 @@ def store_scan_results(user_id: str, project_id: str, mass_tort_id: str, disease
         logger.error(f"[scan] Error storing scan results: {str(e)}")
         return False
 
-def scan_documents(input_data: ScanInput) -> Dict:
-    """
-    Main scanning function that processes the input data according to the workflow.
-    Returns:
-    {
-        'status': 'success' | 'error',
-        'message': str,
-        'results': List[ScanResult],  # Only present on success
-        'errors': List[Dict]  # List of errors encountered during processing
-    }
-    """
-    start_time = time.time()
-    logger.info(f"[scan] Starting scan for user {input_data['userId']}")
-    logger.info(f"[scan] Processing {len(input_data['massTorts'])} mass torts")
-    
-    results = []
-    errors = []
-    total_diseases = sum(len(mt['diseases']) for mt in input_data['massTorts'])
-    processed_diseases = 0
-    
+def check_user_projects(user_id: str, mass_tort_id: str) -> Dict:
+    """Check if user has active projects for the given mass tort."""
     try:
-        # Load the index
-        logger.info("[scan] Loading index from S3")
-        index = load_index(input_data['userId'], input_data['projectId'])
-        if not index:
-            error_msg = "Failed to load or create index"
-            logger.error(f"[scan] {error_msg}")
-            errors.append({
-                'type': 'index_error',
-                'message': error_msg,
-                'userId': input_data['userId'],
-                'projectId': input_data['projectId']
-            })
+        # List objects in the user's directory
+        s3_client = boto3.client('s3')
+        prefix = f"{user_id}/"
+        
+        logger.info(f"[scan] Checking projects for user {user_id} and mass tort {mass_tort_id}")
+        
+        try:
+            response = s3_client.list_objects_v2(
+                Bucket=AWS_UPLOAD_BUCKET_NAME,
+                Prefix=prefix,
+                Delimiter='/'
+            )
+            
+            # Get project directories
+            projects = []
+            for obj in response.get('CommonPrefixes', []):
+                project_id = obj.get('Prefix', '').strip('/').split('/')[-1]
+                
+                # Check if this project has an index
+                index_key = f"{user_id}/{project_id}/index.pkl"
+                try:
+                    s3_client.head_object(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_key)
+                    projects.append(project_id)
+                    logger.info(f"[scan] Found active project: {project_id}")
+                except Exception:
+                    logger.warning(f"[scan] Project {project_id} has no index")
+                    continue
+            
+            if not projects:
+                logger.error(f"[scan] No active projects found for user {user_id}")
+                return {
+                    'status': 'error',
+                    'message': 'No active projects found',
+                    'projects': []
+                }
+            
+            logger.info(f"[scan] Found {len(projects)} active projects")
             return {
-                'status': 'error',
-                'message': error_msg,
-                'errors': errors
+                'status': 'success',
+                'message': f'Found {len(projects)} active projects',
+                'projects': projects
             }
             
-        for mass_tort in input_data['massTorts']:
-            mt_start_time = time.time()
-            logger.info(f"[scan] Processing mass tort: {mass_tort['officialName']} "
-                       f"({len(mass_tort['diseases'])} diseases)")
+        except Exception as e:
+            logger.error(f"[scan] Error listing projects: {str(e)}")
+            return {
+                'status': 'error',
+                'message': f'Error listing projects: {str(e)}',
+                'projects': []
+            }
             
-            for disease in mass_tort['diseases']:
-                processed_diseases += 1
-                disease_start_time = time.time()
-                logger.info(f"[scan] Analyzing disease {processed_diseases}/{total_diseases}: "
-                          f"{disease['name']}")
-                
-                try:
-                    # Analyze disease
-                    scan_result = analyze_disease(index, disease, mass_tort)
-                    
-                    # Store results
-                    logger.info(f"[scan] Storing results for disease: {disease['name']}")
-                    if store_scan_results(
-                        input_data['userId'],
-                        input_data['projectId'],
-                        mass_tort['id'],
-                        disease['id'],
-                        scan_result
-                    ):
-                        results.append(scan_result)
-                        disease_time = time.time() - disease_start_time
-                        logger.info(f"[scan] Completed disease analysis in {disease_time:.2f} seconds")
-                    else:
-                        error_msg = f"Failed to store results for disease {disease['name']}"
-                        logger.error(f"[scan] {error_msg}")
-                        errors.append({
-                            'type': 'storage_error',
-                            'message': error_msg,
-                            'diseaseId': disease['id'],
-                            'massTortId': mass_tort['id']
-                        })
-                except Exception as e:
-                    error_msg = f"Error analyzing disease {disease['name']}: {str(e)}"
-                    logger.error(f"[scan] {error_msg}")
-                    errors.append({
-                        'type': 'analysis_error',
-                        'message': error_msg,
-                        'diseaseId': disease['id'],
-                        'massTortId': mass_tort['id']
-                    })
-                    continue  # Continue with next disease
-            
-            mt_time = time.time() - mt_start_time
-            logger.info(f"[scan] Completed mass tort {mass_tort['officialName']} "
-                       f"in {mt_time:.2f} seconds")
-        
-        total_time = time.time() - start_time
-        logger.info(f"[scan] Scan completed in {total_time:.2f} seconds. "
-                   f"Processed {len(results)}/{total_diseases} diseases successfully")
-        
-        # Determine overall status
-        status = 'success' if len(results) > 0 else 'error'
-        message = f"Successfully processed {len(results)}/{total_diseases} diseases"
-        if errors:
-            message += f" with {len(errors)} errors"
-        
-        return {
-            'status': status,
-            'message': message,
-            'results': results,
-            'errors': errors
-        }
-        
     except Exception as e:
-        total_time = time.time() - start_time
-        error_msg = f"Error in scan process after {total_time:.2f} seconds: {str(e)}"
-        logger.error(f"[scan] {error_msg}")
-        errors.append({
-            'type': 'scan_error',
-            'message': error_msg
-        })
+        logger.error(f"[scan] Error checking user projects: {str(e)}")
         return {
             'status': 'error',
-            'message': error_msg,
-            'errors': errors
+            'message': str(e),
+            'projects': []
+        }
+
+def scan_documents(input_data: Dict) -> Dict:
+    """
+    Scan documents for disease matches.
+    
+    Args:
+        input_data: Dictionary containing scan parameters
+        
+    Returns:
+        Dict containing scan results
+    """
+    try:
+        user_id = input_data.get('userId')
+        project_id = input_data.get('projectId')
+        mass_torts = input_data.get('massTorts', [])
+
+        if not user_id or not project_id:
+            raise ValueError("Missing required userId or projectId")
+
+        logger.info(f"[scan] Starting scan for user {user_id}")
+        
+        # Check for active projects first
+        projects_check = check_user_projects(user_id, project_id)
+        if projects_check['status'] == 'error':
+            raise ValueError(projects_check['message'])
+        
+        logger.info(f"[scan] Processing {len(mass_torts)} mass torts")
+
+        start_time = time.time()
+        total_diseases = 0
+        successful_diseases = 0
+        errors = []
+
+        # Load index using the existing load_index function
+        logger.info("[scan] Loading index from S3")
+        index = load_index(user_id, project_id)
+        if not index:
+            raise Exception("Failed to load or create index")
+        logger.info("[scan] Successfully loaded index")
+
+        # Process each mass tort
+        results = []
+        for mass_tort in mass_torts:
+            mass_tort_name = mass_tort.get('officialName', 'Unknown Mass Tort')
+            diseases = mass_tort.get('diseases', [])
+            total_diseases += len(diseases)
+
+            logger.info(f"[scan] Processing mass tort: {mass_tort_name} ({len(diseases)} diseases)")
+            mass_tort_start = time.time()
+
+            # Analyze each disease
+            disease_results = []
+            for i, disease in enumerate(diseases, 1):
+                logger.info(f"[scan] Analyzing disease {i}/{len(diseases)}: {disease.get('name', 'Unknown')}")
+                result = analyze_disease(disease, index, mass_tort_name)
+                
+                if 'error' not in result:
+                    successful_diseases += 1
+                else:
+                    errors.append(f"{result['disease_name']}: {result.get('error')}")
+                
+                disease_results.append(result)
+
+            mass_tort_time = time.time() - mass_tort_start
+            logger.info(f"[scan] Completed mass tort {mass_tort_name} in {mass_tort_time:.2f} seconds")
+
+            # Add results for this mass tort
+            results.append({
+                'mass_tort_name': mass_tort_name,
+                'diseases': disease_results,
+                'processing_time': mass_tort_time
+            })
+
+        total_time = time.time() - start_time
+        logger.info(f"[scan] Scan completed in {total_time:.2f} seconds. Processed {successful_diseases}/{total_diseases} diseases successfully")
+
+        if successful_diseases < total_diseases:
+            error_message = f"Successfully processed {successful_diseases}/{total_diseases} diseases with {len(errors)} errors"
+            if errors:
+                error_message += f": {'; '.join(errors)}"
+            raise Exception(error_message)
+
+        return {
+            'status': 'success',
+            'message': f'Successfully processed {successful_diseases} diseases',
+            'results': results,
+            'processing_time': total_time,
+            'total_diseases': total_diseases,
+            'successful_diseases': successful_diseases
+        }
+
+    except Exception as e:
+        logger.error(f"[scan] Error during scan: {str(e)}")
+        return {
+            'status': 'error',
+            'message': str(e),
+            'results': results if 'results' in locals() else [],
+            'processing_time': time.time() - start_time if 'start_time' in locals() else 0,
+            'total_diseases': total_diseases if 'total_diseases' in locals() else 0,
+            'successful_diseases': successful_diseases if 'successful_diseases' in locals() else 0
         }
 
 # Export the main function and types

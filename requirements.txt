@@ -27,3 +27,4 @@ defusedxml
 typing-extensions
 requests
 beautifulsoup4
+flask-restx
