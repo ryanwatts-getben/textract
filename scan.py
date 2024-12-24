@@ -30,7 +30,14 @@ logging.basicConfig(
     level=getattr(logging, LOG_CONFIG["level"]),
     format=LOG_CONFIG["format"]
 )
+
+# Create logger for this module
 logger = logging.getLogger(__name__)
+
+# Configure other loggers
+logging.getLogger("openai").setLevel(logging.WARNING)  # Set OpenAI logger to WARNING level
+logging.getLogger("httpx").setLevel(logging.WARNING)   # Set httpx logger to WARNING level
+logging.getLogger("urllib3").setLevel(logging.WARNING) # Set urllib3 logger to WARNING level
 
 # Type definitions
 class Symptom(TypedDict):
@@ -151,12 +158,14 @@ def query_index(index: VectorStoreIndex, query: str) -> Dict:
     try:
         logger.info(f"[scan] Initializing query with length: {len(query)} characters -> {query}")
         
+        # Initialize Anthropic LLM
         llm = Anthropic(
             model=LLM_MODEL,
             api_key=os.getenv('ANTHROPIC_API_KEY')
         )
         logger.debug(f"[scan] Initialized Anthropic LLM with model: {LLM_MODEL}")
         
+        # Create query engine with explicit LLM configuration
         logger.info("[scan] Creating query engine with configured parameters")
         query_engine = index.as_query_engine(
             llm=llm,
@@ -181,125 +190,60 @@ def query_index(index: VectorStoreIndex, query: str) -> Dict:
         logger.error(f"[scan] Error querying index: {str(e)}")
         return {'response': '', 'relevantExcerpts': []}
 
-def analyze_disease(disease: Dict, index: VectorStoreIndex, mass_tort_name: str) -> Dict:
-    """Analyze a single disease against the document index."""
+def analyze_disease(index: VectorStoreIndex, disease_name: str, disease_criteria: Dict) -> Dict:
+    """Analyze a single disease using the provided index."""
     try:
-        logger.info(f"[scan] Starting analysis of disease '{disease.get('name', '')}' for mass tort '{mass_tort_name}'")
+        logger.info(f"[scan] Starting analysis of disease '{disease_name}'")
         
-        # Ensure disease is a dictionary and has required fields
-        if not isinstance(disease, dict):
-            raise ValueError("Disease must be a dictionary")
-
-        disease_name = disease.get('name')
-        if not disease_name:
-            raise ValueError("Disease must have a name")
-
-        # Log the raw data for debugging
-        logger.debug(f"[scan] Raw disease data: {json.dumps(disease, indent=2)}")
-
-        # Extract and validate disease characteristics
-        symptoms = disease.get('symptoms', [])
-        lab_results = disease.get('labResults', [])
-        procedures = disease.get('diagnosticProcedures', [])
-        risk_factors = disease.get('riskFactors', [])
-
-        logger.info(f"[scan] Processing disease characteristics for {disease_name}:")
-        logger.info(f"[scan] - Symptoms: {len(symptoms)}")
-        logger.info(f"[scan] - Lab Results: {len(lab_results)}")
-        logger.info(f"[scan] - Procedures: {len(procedures)}")
-        logger.info(f"[scan] - Risk Factors: {len(risk_factors)}")
-
-        # Extract names safely, handling both dictionary and string formats
-        def safe_get_name(item) -> Optional[str]:
-            if isinstance(item, dict):
-                name = item.get('name', '').strip()
-                return name if name else None
-            elif isinstance(item, str):
-                name = item.strip()
-                return name if name else None
-            elif isinstance(item, set):
-                # Convert set to string and clean it
-                name = str(item).strip('{}').strip()
-                return name if name else None
-            else:
-                logger.warning(f"[scan] Unexpected item type: {type(item)}")
-                return None
-
-        # Extract names from each category and filter out None/empty values
-        symptom_names = [name for s in symptoms if (name := safe_get_name(s))]
-        lab_result_names = [name for l in lab_results if (name := safe_get_name(l))]
-        procedure_names = [name for p in procedures if (name := safe_get_name(p))]
-        risk_factor_names = [name for r in risk_factors if (name := safe_get_name(r))]
-
-        # Log extracted names for debugging
-        logger.debug(f"[scan] Extracted symptom names: {symptom_names}")
-        logger.debug(f"[scan] Extracted lab result names: {lab_result_names}")
-        logger.debug(f"[scan] Extracted procedure names: {procedure_names}")
-        logger.debug(f"[scan] Extracted risk factor names: {risk_factor_names}")
-
-        # Build search queries with proper formatting
-        queries = []
-        if symptom_names:
-            formatted_symptoms = ', '.join(f'"{s}"' for s in symptom_names)
-            queries.append(f"symptoms including {formatted_symptoms}")
-        if lab_result_names:
-            formatted_labs = ', '.join(f'"{l}"' for l in lab_result_names)
-            queries.append(f"lab results including {formatted_labs}")
-        if procedure_names:
-            formatted_procedures = ', '.join(f'"{p}"' for p in procedure_names)
-            queries.append(f"procedures including {formatted_procedures}")
-        if risk_factor_names:
-            formatted_risks = ', '.join(f'"{r}"' for r in risk_factor_names)
-            queries.append(f"risk factors including {formatted_risks}")
-
-        # Combine queries with proper context
-        if queries:
-            combined_query = f"Find evidence related to {disease_name} with the following characteristics: " + " AND ".join(queries)
-        else:
-            combined_query = f"Find evidence related to {disease_name}"
+        # Verify index is valid
+        if not isinstance(index, VectorStoreIndex):
+            logger.error("[scan] Invalid index object provided")
+            raise ValueError("Invalid index object provided")
             
-        logger.info(f"[scan] Generated query: {combined_query}")
+        # Log disease characteristics
+        logger.info(f"[scan] Processing disease characteristics for {disease_name}:")
+        logger.info(f"[scan] - Symptoms: {len(disease_criteria.get('symptoms', []))}")
+        logger.info(f"[scan] - Lab Results: {len(disease_criteria.get('lab_results', []))}")
+        logger.info(f"[scan] - Procedures: {len(disease_criteria.get('procedures', []))}")
+        logger.info(f"[scan] - Risk Factors: {len(disease_criteria.get('risk_factors', []))}")
 
-        # Query the index
-        query_engine = index.as_query_engine()
-        response = query_engine.query(combined_query)
+        # Generate query from disease criteria
+        query = generate_disease_query(disease_name, disease_criteria)
+        logger.info(f"[scan] Generated query: {query}")
 
-        # Process response
-        matches = []
-        if hasattr(response, 'source_nodes'):
-            for node in response.source_nodes:
-                match = {
-                    'text': node.text,
-                    'score': float(node.score) if hasattr(node, 'score') else 0.0,
-                    'document': node.metadata.get('file_name', 'Unknown')
-                }
-                matches.append(match)
-
-        logger.info(f"[scan] Found {len(matches)} matches for {disease_name}")
-
-        # Return analysis results
-        return {
-            'disease_name': disease_name,
-            'matches': matches,
-            'query': combined_query,
-            'total_matches': len(matches),
-            'characteristics': {
-                'symptoms': symptom_names,
-                'lab_results': lab_result_names,
-                'procedures': procedure_names,
-                'risk_factors': risk_factor_names
+        # Query the index using our configured function
+        query_result = query_index(index, query)
+        if not query_result['response']:
+            logger.warning("[scan] No relevant information found in documents")
+            return {
+                'status': 'no_matches',
+                'disease_name': disease_name,
+                'message': 'No relevant information found in documents'
             }
+        
+        # Process response
+        result = {
+            'status': 'success',
+            'disease_name': disease_name,
+            'matches': process_response(query_result['response'], disease_criteria)
         }
+        
+        # Log the disease analysis result
+        logger.info(f"[scan] Disease Analysis Result for '{disease_name}':")
+        logger.info(json.dumps(result, indent=2))
+        
+        return result
 
     except Exception as e:
-        logger.error(f"[scan] Error analyzing disease {disease.get('name', 'Unknown')}: {str(e)}")
-        logger.error(f"[scan] Error details:", exc_info=True)
-        return {
-            'disease_name': disease.get('name', 'Unknown'),
-            'error': str(e),
-            'matches': [],
-            'total_matches': 0
+        error_result = {
+            'status': 'error',
+            'disease_name': disease_name,
+            'error': str(e)
         }
+        logger.error(f"[scan] Error analyzing disease {disease_name}: {str(e)}")
+        logger.error("[scan] Error details:", exc_info=True)
+        logger.error(json.dumps(error_result, indent=2))
+        raise
 
 def store_scan_results(user_id: str, project_id: str, mass_tort_id: str, disease_id: str, results: ScanResult):
     """Store scan results in S3."""
@@ -433,7 +377,7 @@ def scan_documents(input_data: Dict) -> Dict:
             disease_results = []
             for i, disease in enumerate(diseases, 1):
                 logger.info(f"[scan] Analyzing disease {i}/{len(diseases)}: {disease.get('name', 'Unknown')}")
-                result = analyze_disease(disease, index, mass_tort_name)
+                result = analyze_disease(index, disease.get('name', 'Unknown'), disease)
                 
                 if 'error' not in result:
                     successful_diseases += 1
@@ -461,7 +405,7 @@ def scan_documents(input_data: Dict) -> Dict:
                 error_message += f": {'; '.join(errors)}"
             raise Exception(error_message)
 
-        return {
+        response = {
             'status': 'success',
             'message': f'Successfully processed {successful_diseases} diseases',
             'results': results,
@@ -470,9 +414,14 @@ def scan_documents(input_data: Dict) -> Dict:
             'successful_diseases': successful_diseases
         }
 
+        # Log the response in a readable format
+        logger.info("[scan] Frontend Response:")
+        logger.info(json.dumps(response, indent=2))
+
+        return response
+
     except Exception as e:
-        logger.error(f"[scan] Error during scan: {str(e)}")
-        return {
+        error_response = {
             'status': 'error',
             'message': str(e),
             'results': results if 'results' in locals() else [],
@@ -480,6 +429,295 @@ def scan_documents(input_data: Dict) -> Dict:
             'total_diseases': total_diseases if 'total_diseases' in locals() else 0,
             'successful_diseases': successful_diseases if 'successful_diseases' in locals() else 0
         }
+        
+        # Log the error response
+        logger.error("[scan] Frontend Error Response:")
+        logger.error(json.dumps(error_response, indent=2))
+        
+        return error_response
+
+def generate_disease_query(disease_name: str, disease_criteria: Dict) -> str:
+    """Generate a query string from disease criteria."""
+    try:
+        logger.info(f"[scan] Generating query for disease: {disease_name}")
+        
+        query_parts = [f"Find evidence related to {disease_name} with the following characteristics:"]
+        
+        # Process symptoms
+        symptoms = disease_criteria.get('symptoms', [])
+        if symptoms:
+            symptom_names = [s.get('name', '') if isinstance(s, dict) else str(s) for s in symptoms]
+            symptom_names = [s for s in symptom_names if s]  # Filter out empty strings
+            if symptom_names:
+                formatted_symptoms = ', '.join(f'"{s}"' for s in symptom_names)
+                query_parts.append(f"symptoms including {formatted_symptoms}")
+        
+        # Process lab results
+        lab_results = disease_criteria.get('labResults', [])
+        if lab_results:
+            lab_names = [l.get('name', '') if isinstance(l, dict) else str(l) for l in lab_results]
+            lab_names = [l for l in lab_names if l]
+            if lab_names:
+                formatted_labs = ', '.join(f'"{l}"' for l in lab_names)
+                query_parts.append(f"lab results including {formatted_labs}")
+        
+        # Process procedures
+        procedures = disease_criteria.get('diagnosticProcedures', [])
+        if procedures:
+            procedure_names = [p.get('name', '') if isinstance(p, dict) else str(p) for p in procedures]
+            procedure_names = [p for p in procedure_names if p]
+            if procedure_names:
+                formatted_procedures = ', '.join(f'"{p}"' for p in procedure_names)
+                query_parts.append(f"procedures including {formatted_procedures}")
+        
+        # Process risk factors
+        risk_factors = disease_criteria.get('riskFactors', [])
+        if risk_factors:
+            risk_names = [r.get('name', '') if isinstance(r, dict) else str(r) for r in risk_factors]
+            risk_names = [r for r in risk_names if r]
+            if risk_names:
+                formatted_risks = ', '.join(f'"{r}"' for r in risk_names)
+                query_parts.append(f"risk factors including {formatted_risks}")
+        
+        # Combine all parts with AND
+        query = " AND ".join(query_parts)
+        logger.info(f"[scan] Generated query: {query}")
+        return query
+        
+    except Exception as e:
+        logger.error(f"[scan] Error generating query: {str(e)}")
+        raise
+
+def process_response(response_text: str, disease_criteria: Dict) -> Dict:
+    """Process the response text and match it against disease criteria with contextual analysis."""
+    try:
+        logger.info("[scan] Processing response text for medical evidence")
+        
+        matches = {
+            'symptoms': [],
+            'lab_results': [],
+            'procedures': [],
+            'risk_factors': [],
+            'confidence_scores': {
+                'symptoms': 0.0,
+                'lab_results': 0.0,
+                'procedures': 0.0,
+                'risk_factors': 0.0
+            },
+            'overall_confidence': 0.0,
+            'relevant_excerpts': []
+        }
+        
+        # Split response into sentences for better context analysis
+        sentences = [s.strip() for s in response_text.split('.') if s.strip()]
+        
+        def calculate_confidence(term: str, context: str) -> tuple[float, str]:
+            """Calculate confidence score based on contextual evidence."""
+            confidence = 0.0
+            evidence = ""
+            
+            # Check for definitive language
+            if any(phrase in context.lower() for phrase in [
+                "diagnosed with", "confirmed", "tested positive for",
+                "exhibits clear signs of", "demonstrates", "shows"
+            ]):
+                confidence += 0.4
+                evidence = context
+            
+            # Check for temporal markers
+            elif any(phrase in context.lower() for phrase in [
+                "history of", "chronic", "recurring", "persistent",
+                "ongoing", "frequently", "regularly"
+            ]):
+                confidence += 0.3
+                evidence = context
+            
+            # Check for severity indicators
+            elif any(phrase in context.lower() for phrase in [
+                "severe", "significant", "substantial", "major",
+                "acute", "critical", "concerning"
+            ]):
+                confidence += 0.25
+                evidence = context
+            
+            # Check for symptom associations
+            elif any(phrase in context.lower() for phrase in [
+                "associated with", "linked to", "related to",
+                "consistent with", "indicative of"
+            ]):
+                confidence += 0.2
+                evidence = context
+            
+            # Check for measurement or quantification
+            elif any(phrase in context.lower() for phrase in [
+                "measured", "recorded", "quantified", "rated",
+                "scored", "assessed at"
+            ]):
+                confidence += 0.35
+                evidence = context
+            
+            # Check for medical professional observation
+            elif any(phrase in context.lower() for phrase in [
+                "doctor noted", "physician observed", "clinician reported",
+                "medical record indicates", "specialist confirmed"
+            ]):
+                confidence += 0.45
+                evidence = context
+            
+            # Basic mention without strong context
+            elif term.lower() in context.lower():
+                confidence += 0.15
+                evidence = context
+            
+            # Add confidence if multiple symptoms are mentioned together
+            symptom_count = sum(1 for s in disease_criteria.get('symptoms', []) 
+                              if isinstance(s, dict) and s.get('name', '').lower() in context.lower())
+            if symptom_count > 1:
+                confidence += 0.1 * min(symptom_count - 1, 3)  # Cap at 3 additional symptoms
+            
+            # Normalize confidence to maximum of 1.0
+            confidence = min(confidence, 1.0)
+            
+            return confidence, evidence
+        
+        # Process symptoms with context
+        symptoms = disease_criteria.get('symptoms', [])
+        for symptom in symptoms:
+            symptom_name = symptom.get('name', '') if isinstance(symptom, dict) else str(symptom)
+            max_confidence = 0.0
+            best_evidence = ""
+            
+            # Look for the symptom in each sentence to find the best context
+            for sentence in sentences:
+                if symptom_name.lower() in sentence.lower():
+                    confidence, evidence = calculate_confidence(symptom_name, sentence)
+                    if confidence > max_confidence:
+                        max_confidence = confidence
+                        best_evidence = evidence
+            
+            if max_confidence > 0:
+                matches['symptoms'].append({
+                    'name': symptom_name,
+                    'confidence': max_confidence,
+                    'excerpt': best_evidence.strip()
+                })
+        
+        # Process lab results with context
+        lab_results = disease_criteria.get('labResults', [])
+        for lab in lab_results:
+            lab_name = lab.get('name', '') if isinstance(lab, dict) else str(lab)
+            max_confidence = 0.0
+            best_evidence = ""
+            
+            for sentence in sentences:
+                if lab_name.lower() in sentence.lower():
+                    # Higher base confidence for lab results as they're more definitive
+                    confidence, evidence = calculate_confidence(lab_name, sentence)
+                    confidence += 0.2  # Lab results are more objective
+                    confidence = min(confidence, 1.0)
+                    if confidence > max_confidence:
+                        max_confidence = confidence
+                        best_evidence = evidence
+            
+            if max_confidence > 0:
+                matches['lab_results'].append({
+                    'name': lab_name,
+                    'confidence': max_confidence,
+                    'excerpt': best_evidence.strip()
+                })
+        
+        # Process procedures with context
+        procedures = disease_criteria.get('diagnosticProcedures', [])
+        for procedure in procedures:
+            procedure_name = procedure.get('name', '') if isinstance(procedure, dict) else str(procedure)
+            max_confidence = 0.0
+            best_evidence = ""
+            
+            for sentence in sentences:
+                if procedure_name.lower() in sentence.lower():
+                    confidence, evidence = calculate_confidence(procedure_name, sentence)
+                    if confidence > max_confidence:
+                        max_confidence = confidence
+                        best_evidence = evidence
+            
+            if max_confidence > 0:
+                matches['procedures'].append({
+                    'name': procedure_name,
+                    'confidence': max_confidence,
+                    'excerpt': best_evidence.strip()
+                })
+        
+        # Process risk factors with context
+        risk_factors = disease_criteria.get('riskFactors', [])
+        for risk in risk_factors:
+            risk_name = risk.get('name', '') if isinstance(risk, dict) else str(risk)
+            max_confidence = 0.0
+            best_evidence = ""
+            
+            for sentence in sentences:
+                if risk_name.lower() in sentence.lower():
+                    confidence, evidence = calculate_confidence(risk_name, sentence)
+                    if confidence > max_confidence:
+                        max_confidence = confidence
+                        best_evidence = evidence
+            
+            if max_confidence > 0:
+                matches['risk_factors'].append({
+                    'name': risk_name,
+                    'confidence': max_confidence,
+                    'excerpt': best_evidence.strip()
+                })
+        
+        # Calculate weighted category scores
+        def calculate_category_score(matches_list: List[Dict]) -> float:
+            if not matches_list:
+                return 0.0
+            # Weight higher confidence findings more heavily
+            weights = [m['confidence'] for m in matches_list]
+            scores = [m['confidence'] for m in matches_list]
+            return sum(w * s for w, s in zip(weights, scores)) / sum(weights) if weights else 0.0
+        
+        # Update confidence scores for each category
+        matches['confidence_scores']['symptoms'] = calculate_category_score(matches['symptoms'])
+        matches['confidence_scores']['lab_results'] = calculate_category_score(matches['lab_results'])
+        matches['confidence_scores']['procedures'] = calculate_category_score(matches['procedures'])
+        matches['confidence_scores']['risk_factors'] = calculate_category_score(matches['risk_factors'])
+        
+        # Calculate overall confidence with weighted importance
+        weights = {
+            'symptoms': 0.4,      # Symptoms are important but subjective
+            'lab_results': 0.3,   # Lab results are objective but may be routine
+            'procedures': 0.2,    # Procedures indicate medical attention
+            'risk_factors': 0.1   # Risk factors are important context
+        }
+        
+        weighted_scores = []
+        for category, weight in weights.items():
+            score = matches['confidence_scores'][category]
+            if score > 0:
+                weighted_scores.append(score * weight)
+        
+        matches['overall_confidence'] = sum(weighted_scores) / sum(weights[cat] 
+            for cat in ['symptoms', 'lab_results', 'procedures', 'risk_factors']
+            if matches['confidence_scores'][cat] > 0) if weighted_scores else 0.0
+        
+        # Add relevant excerpts with confidence context
+        matches['relevant_excerpts'] = []
+        for category in ['symptoms', 'lab_results', 'procedures', 'risk_factors']:
+            for match in matches[category]:
+                excerpt = f"{match['name']} (Confidence: {match['confidence']:.2%}): {match['excerpt']}"
+                matches['relevant_excerpts'].append(excerpt)
+        
+        logger.info(f"[scan] Processed response with {len(matches['relevant_excerpts'])} matches")
+        logger.info(f"[scan] Overall confidence: {matches['overall_confidence']:.2%}")
+        logger.debug(f"[scan] Match details: {json.dumps(matches, indent=2)}")
+        
+        return matches
+        
+    except Exception as e:
+        logger.error(f"[scan] Error processing response: {str(e)}")
+        logger.error("[scan] Error details:", exc_info=True)
+        raise
 
 # Export the main function and types
 __all__ = [

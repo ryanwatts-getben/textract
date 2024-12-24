@@ -5,7 +5,7 @@ import os
 import tempfile
 import shutil
 import argparse
-from typing import List, Dict, Optional, Set, Tuple
+from typing import List, Dict, Optional, Set, Tuple, Any
 from llama_index.core import VectorStoreIndex, Document, Settings
 from llama_index.embeddings.langchain import LangchainEmbedding
 from llama_index.llms.anthropic import Anthropic
@@ -203,94 +203,66 @@ class IndexManager:
             
         return categorized
 
-def create_index(
-    documents: List[Document],
-    embed_model = None,
-    s3_client = None,
-    bucket_name: str = None,
-    index_cache_key: str = None,
-    temp_dir: str = None,
-    cache_path: str = None,
-    batch_size: int = RAGDocumentConfig.BATCH_SIZE,
-    chunk_size: int = VECTOR_STORE_CONFIG["chunk_size"]
-) -> VectorStoreIndex:
-    """
-    Create a vector store index from documents with S3 caching support.
-    """
-    logger.info(f"[create_index] Starting index creation with {len(documents)} documents.")
+def create_index(documents: List[Document], embed_model: Any = None, batch_size: int = 10, chunk_size: int = 512) -> VectorStoreIndex:
+    """Create a new vector store index from the provided documents."""
     try:
-        # Use provided embed_model or get a new one
+        logger.info(f"[create_index] Starting index creation with {len(documents)} documents.")
+        
         if embed_model is None:
             embed_model = get_embedding_model()
         
-        # Configure settings for batching and chunking
-        Settings.chunk_size = VECTOR_STORE_CONFIG["chunk_size"]
-        Settings.chunk_overlap = VECTOR_STORE_CONFIG["chunk_overlap"]
+        # Configure LLM to use Anthropic
+        llm = Anthropic(
+            model=os.getenv('ANTHROPIC_MODEL', 'claude-2'),
+            api_key=os.getenv('ANTHROPIC_API_KEY')
+        )
+        
+        # Configure global settings to use Anthropic
+        Settings.llm = llm
         Settings.embed_model = embed_model
-        Settings.node_parser = SentenceSplitter(
-            chunk_size=VECTOR_STORE_CONFIG["chunk_size"],
-            chunk_overlap=VECTOR_STORE_CONFIG["chunk_overlap"]
-        )
-        Settings.embed_batch_size = VECTOR_STORE_CONFIG["embed_batch_size"]
         
-        # Process documents in batches
-        total_nodes = []
-        batch_size = min(batch_size, 1000)  # Limit batch size
-        for i in range(0, len(documents), batch_size):
-            batch = documents[i:i + batch_size]
-            logger.info(f'[create_index] Processing batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size}')
-            
-            # Create index for this batch
-            batch_index = VectorStoreIndex.from_documents(
-                documents=batch,
-                show_progress=VECTOR_STORE_CONFIG["show_progress"],
-                callback_manager=CallbackManager([
-                    LlamaDebugHandler(print_trace_on_end=True)
-                ])
-            )
-            
-            # Collect nodes from this batch
-            total_nodes.extend(list(batch_index.docstore.docs.values()))
-            
-            # Clear memory
-            del batch_index
-            gc.collect()
-            
-        # Create final index from all nodes
-        logger.info(f'[create_index] Creating final index from {len(total_nodes)} nodes')
+        logger.info("[create_index] Creating VectorStoreIndex with Anthropic LLM")
         index = VectorStoreIndex.from_documents(
-            [Document(text=node.text, metadata=node.metadata) for node in total_nodes],
-            show_progress=VECTOR_STORE_CONFIG["show_progress"],
-            callback_manager=CallbackManager([
-                LlamaDebugHandler(print_trace_on_end=True)
-            ])
+            documents,
+            embed_model=embed_model,
+            llm=llm,  # Explicitly pass the LLM
+            show_progress=True
         )
-        
-        # Handle caching and S3 upload
-        if cache_path:
-            with open(cache_path, 'wb') as f:
-                pickle.dump(index, f, protocol=STORAGE_CONFIG["pickle_protocol"])
-            logger.info(f"[create_index] Cached index at '{cache_path}'")
-        
-        if all([s3_client, bucket_name, index_cache_key, temp_dir]):
-            try:
-                index_cache_path = os.path.join(temp_dir, STORAGE_CONFIG["cache_filename"])
-                with open(index_cache_path, 'wb') as f:
-                    pickle.dump(index, f, protocol=STORAGE_CONFIG["pickle_protocol"])
-                
-                s3_client.upload_file(
-                    Filename=index_cache_path,
-                    Bucket=bucket_name,
-                    Key=index_cache_key
-                )
-                logger.info('[create_index] Index cache uploaded to S3 successfully')
-            except Exception as e:
-                logger.error(RAG_ERROR_MESSAGES["index_creation_error"].format(error=str(e)))
+        logger.info("[create_index] VectorStoreIndex created successfully")
 
+        # Cache the index locally
+        try:
+            temp_dir = tempfile.mkdtemp()
+            cache_path = os.path.join(temp_dir, 'vector_index.pkl')
+            
+            # Save locally first
+            with open(cache_path, 'wb') as f:
+                pickle.dump(index, f)
+            logger.info("[create_index] Created and cached new vector index locally")
+
+            # Upload to S3
+            try:
+                s3_client = boto3.client('s3')
+                bucket_name = os.getenv('AWS_UPLOAD_BUCKET_NAME')
+                if bucket_name:
+                    s3_client.upload_file(cache_path, bucket_name, '00000/22222/index.pkl')
+                    logger.info("[create_index] Index serialized and saved to local cache successfully")
+                    logger.info("[create_index] Index cache uploaded to S3 successfully")
+            except Exception as s3_error:
+                logger.error(f"[create_index] Error uploading to S3: {str(s3_error)}")
+                # Continue even if S3 upload fails
+            
+            # Clean up temp directory
+            shutil.rmtree(temp_dir)
+            
+        except Exception as cache_error:
+            logger.error(f"[create_index] Error caching index: {str(cache_error)}")
+            # Continue even if caching fails
+            
         return index
 
     except Exception as e:
-        logger.error(RAG_ERROR_MESSAGES["index_creation_error"].format(error=str(e)))
+        logger.error(f"[create_index] Error creating index: {str(e)}")
         raise
 
 def process_chunk_with_fallback(chunk: List[Document], embed_model) -> Optional[VectorStoreIndex]:

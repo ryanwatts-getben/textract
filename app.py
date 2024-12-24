@@ -14,7 +14,7 @@ from typing import List, Optional, Tuple, Dict, Any
 from pathlib import Path
 import shutil
 from pypdf import PdfReader
-from docx.document import Document as DocxDocument
+# import docx  # Changed from docx.document import Document
 import csv
 import torch
 
@@ -26,7 +26,7 @@ from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import ParseError
-from defusedxml import ElementTree as DefusedET
+# from defusedxml import ElementTree as DefusedET
 
 # LlamaIndex imports
 from llama_index.core import (
@@ -279,12 +279,12 @@ def process_single_document(s3_client, key: str) -> Optional[Document]:
         # Extract text based on file type
         if file_extension == '.pdf':
             text = extract_text_from_pdf(content)
-        elif file_extension == '.docx':
-            text = extract_text_from_docx(content)
+        # elif file_extension == '.docx':
+        #     text = extract_text_from_docx(content)
         elif file_extension == '.json':
             text = process_json_content(json.loads(content.decode('utf-8')))
-        elif file_extension == '.xml' or file_extension == '.xsd':
-            text = extract_text_from_xml(content)
+        # elif file_extension == '.xml' or file_extension == '.xsd':
+        #     text = extract_text_from_xml(content)
         elif file_extension == '.csv':
             text = extract_text_from_csv(content)
         else:  # .txt and other text files
@@ -724,53 +724,53 @@ def sanitize_filename(filename):
 # You might need to adjust this depending on your application flow
 index = None  # Placeholder for the index variable
 
-def parse_xml_content(xml_content: str, xsd_content: Optional[str] = None) -> str:
-    """
-    Parse XML content and optionally validate against XSD schema.
-    """
-    try:
-        # Parse XML securely using DefusedET
-        root = DefusedET.fromstring(xml_content)
+# def parse_xml_content(xml_content: str, xsd_content: Optional[str] = None) -> str:
+#     """
+#     Parse XML content and optionally validate against XSD schema.
+#     """
+#     try:
+#         # Parse XML securely using DefusedET
+#         root = DefusedET.fromstring(xml_content)
         
-        # If XSD content is provided, validate XML
-        if xsd_content:
-            logger.info("[app] Validating XML against XSD schema")
-            # Parse XSD content securely
-            xsd_root = DefusedET.fromstring(xsd_content)
-            xml_schema = ET.XMLSchema(xsd_root)
-            if not xml_schema.validate(root):
-                logger.warning(f"[app] XML validation failed against XSD schema")
-                # Optionally, raise an error or log details
-                # xml_schema.assertValid(root)
+#         # If XSD content is provided, validate XML
+#         if xsd_content:
+#             logger.info("[app] Validating XML against XSD schema")
+#             # Parse XSD content securely
+#             xsd_root = DefusedET.fromstring(xsd_content)
+#             xml_schema = ET.XMLSchema(xsd_root)
+#             if not xml_schema.validate(root):
+#                 logger.warning(f"[app] XML validation failed against XSD schema")
+#                 # Optionally, raise an error or log details
+#                 # xml_schema.assertValid(root)
         
-        # Rest of the function remains the same
-        text_content = []
+#         # Rest of the function remains the same
+#         text_content = []
 
-        def process_element(element, path=""):
-            """Recursively process XML elements."""
-            current_path = f"{path}/{element.tag}" if path else element.tag
+#         def process_element(element, path=""):
+#             """Recursively process XML elements."""
+#             current_path = f"{path}/{element.tag}" if path else element.tag
 
-            # Add element text if present
-            if element.text and element.text.strip():
-                text_content.append(f"{current_path}: {element.text.strip()}")
+#             # Add element text if present
+#             if element.text and element.text.strip():
+#                 text_content.append(f"{current_path}: {element.text.strip()}")
 
-            # Process attributes
-            for key, value in element.attrib.items():
-                text_content.append(f"{current_path}[@{key}]: {value}")
+#             # Process attributes
+#             for key, value in element.attrib.items():
+#                 text_content.append(f"{current_path}[@{key}]: {value}")
 
-            # Process child elements
-            for child in element:
-                process_element(child, current_path)
+#             # Process child elements
+#             for child in element:
+#                 process_element(child, current_path)
 
-        process_element(root)
-        return '\n'.join(text_content)
+#         process_element(root)
+#         return '\n'.join(text_content)
 
-    except ET.ParseError as e:
-        logger.error(f"[app] XML parsing error: {str(e)}")
-        raise
-    except Exception as e:
-        logger.error(f"[app] Error processing XML content: {str(e)}")
-        raise
+#     except ET.ParseError as e:
+#         logger.error(f"[app] XML parsing error: {str(e)}")
+#         raise
+#     except Exception as e:
+#         logger.error(f"[app] Error processing XML content: {str(e)}")
+#         raise
 
 def process_json_content(data):
     """Process JSON data and convert it to text."""
@@ -837,15 +837,15 @@ def extract_text_from_pdf(content: bytes) -> str:
         logger.error(f"[app] Error extracting text from PDF: {str(e)}")
         return ""
 
-def extract_text_from_docx(content: bytes) -> str:
-    """Extract text from DOCX content."""
-    try:
-        with io.BytesIO(content) as docx_file:
-            doc = Document(docx_file)
-            return '\n'.join(paragraph.text for paragraph in doc.paragraphs)
-    except Exception as e:
-        logger.error(f"[app] Error extracting text from DOCX: {str(e)}")
-        return ""
+# def extract_text_from_docx(content: bytes) -> str:
+#     """Extract text from DOCX content."""
+#     try:
+#         with io.BytesIO(content) as docx_file:
+#             doc = docx.Document(docx_file)
+#             return '\n'.join(paragraph.text for paragraph in doc.paragraphs)
+#     except Exception as e:
+#         logger.error(f"[app] Error extracting text from DOCX: {str(e)}")
+#         return ""
 
 # def extract_text_from_xml(content: bytes) -> str:
 #     """Extract text from XML content."""
@@ -995,9 +995,9 @@ def scrape_disease_info():
 def begin_scan():
     """
     Endpoint to begin scanning documents for mass tort analysis.
-    Expects a JSON payload with user, project, and mass tort information.
     """
     try:
+        logger.info("[app] Received scan request")
         data = request.get_json()
         if not data:
             logger.error("[app] No JSON data provided")
@@ -1016,39 +1016,34 @@ def begin_scan():
                 'message': f'Missing required fields: {", ".join(missing_fields)}'
             }), 400
 
-        # Log the incoming data structure
-        logger.info(f"[app] Received scan request for user {data['userId']}, project {data['projectId']}")
+        logger.info(f"[app] Starting scan for project {data['projectId']}")
         logger.info(f"[app] Processing {len(data['massTorts'])} mass torts")
-
-        # Process each mass tort
-        for mass_tort in data['massTorts']:
-            logger.info(f"[app] Processing mass tort: {mass_tort['officialName']}")
-            logger.info(f"[app] Found {len(mass_tort['diseases'])} diseases to analyze")
-
-            # Process each disease
-            for disease in mass_tort['diseases']:
-                logger.info(f"[app] Analyzing disease: {disease['name']}")
-                logger.info(f"[app] Found {len(disease.get('symptoms', []))} symptoms")
-                logger.info(f"[app] Found {len(disease.get('labResults', []))} lab results")
-                logger.info(f"[app] Found {len(disease.get('diagnosticProcedures', []))} procedures")
-                logger.info(f"[app] Found {len(disease.get('riskFactors', []))} risk factors")
-
-        # Process the scan with the validated data
-        result = scan_documents(data)
         
-        # Return results
-        if result['status'] == 'success':
+        # Process the scan with validated data
+        try:
+            result = scan_documents(data)
+            
+            if result.get('status') == 'error':
+                logger.error(f"[app] Scan failed: {result.get('message')}")
+                return jsonify(result), 500
+                
             logger.info("[app] Scan completed successfully")
             return jsonify(result), 200
-        else:
-            logger.error(f"[app] Scan failed: {result.get('message', 'Unknown error')}")
-            return jsonify(result), 500
+            
+        except Exception as scan_error:
+            error_msg = f"Error during document scan: {str(scan_error)}"
+            logger.error(f"[app] {error_msg}")
+            return jsonify({
+                'status': 'error',
+                'message': error_msg
+            }), 500
 
     except Exception as e:
-        logger.error(f"[app] Error in /beginScan endpoint: {str(e)}")
+        error_msg = f"Error processing scan request: {str(e)}"
+        logger.error(f"[app] {error_msg}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': error_msg
         }), 500
 
 @app.route('/api/disease-scanner/reports/generate-report', methods=['POST'])

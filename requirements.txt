@@ -28,3 +28,5 @@ typing-extensions
 requests
 beautifulsoup4
 flask-restx
+numpy>=1.21.0
+transformers>=4.30.0
