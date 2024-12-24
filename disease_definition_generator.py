@@ -3,7 +3,6 @@ import os
 import json
 import boto3
 import tempfile
-import pickle
 import csv
 import io
 import shutil
@@ -165,13 +164,27 @@ class DiseaseDefinition(BaseModel):
 def get_embedding_model(model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"):
     """Initialize the embedding model with proper device configuration."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"[disease_definition_generator] Attempting to load embedding model: {model_name} on {device}")
+    logger.info(f"[disease_definition_generator] Using device: {device} for embeddings")
 
     try:
-        # Create HuggingFaceEmbeddings from langchain
+        # Set multiprocessing start method to 'fork' on Unix systems
+        if hasattr(torch.multiprocessing, 'set_start_method'):
+            try:
+                torch.multiprocessing.set_start_method('fork', force=True)
+            except RuntimeError:
+                pass  # Method already set
+
+        # Create HuggingFaceEmbeddings with specific configurations for BioBERT
         base_embeddings = HuggingFaceEmbeddings(
             model_name=model_name,
-            model_kwargs={'device': device}
+            model_kwargs={
+                'device': str(device),
+                'trust_remote_code': True
+            },
+            encode_kwargs={
+                'normalize_embeddings': True,
+                'batch_size': 32
+            }
         )
         
         # Wrap with LangchainEmbedding for LlamaIndex compatibility
@@ -179,113 +192,149 @@ def get_embedding_model(model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-s
             langchain_embeddings=base_embeddings
         )
 
-        # Get embedding dimension by generating a test embedding
+        # Get embedding dimension
         test_embedding = embedding_model.get_text_embedding("test")
         embedding_dimension = len(test_embedding)
 
-        logger.info(f"[disease_definition_generator] Successfully loaded embedding model: {model_name}")
+        logger.info(f"[disease_definition_generator] Successfully loaded BioBERT model")
         logger.info(f"[disease_definition_generator] Embedding dimension: {embedding_dimension}")
 
         return embedding_model, embedding_dimension
 
     except Exception as e:
-        logger.error(f"[disease_definition_generator] Error loading model {model_name}: {str(e)}")
+        logger.error(f"[disease_definition_generator] Error loading BioBERT model: {str(e)}")
         raise
+
 class DiseaseDefinitionEngine:
-    _instance = None  # Class variable to hold the singleton instance
-    _index = None  # Class variable to hold the lazily loaded index
+    """Engine for generating disease definitions using LLM and embeddings."""
+    
+    # Class variables for singleton pattern
+    _instance = None
+    _initialized = False
+    _embed_model = None
+    _embedding_dimension = None
+    _llm = None
+    _prompt_template = None
+    _index = None
 
     def __new__(cls):
+        """Create or return the singleton instance."""
         if cls._instance is None:
             logger.info("[disease_definition_generator] Creating new DiseaseDefinitionEngine instance")
             cls._instance = super(DiseaseDefinitionEngine, cls).__new__(cls)
-            cls._instance._initialized = False
+            cls._instance._initialize()
         return cls._instance
 
-    def __init__(self):
+    def _initialize(self):
+        """Initialize the engine components if not already initialized."""
         if self._initialized:
             logger.debug("[disease_definition_generator] Using existing DiseaseDefinitionEngine instance")
             return
 
-        logger.info("[disease_definition_generator] Initializing DiseaseDefinitionEngine...")
+        logger.info("[disease_definition_generator] Initializing DiseaseDefinitionEngine")
+        try:
+            # Load environment variables
+            self.ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
+            if not self.ANTHROPIC_API_KEY:
+                logger.error("[disease_definition_generator] ANTHROPIC_API_KEY environment variable is not set")
+                raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
 
-        # Load environment variables
-        self.ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
-        if not self.ANTHROPIC_API_KEY:
-            logger.error("[disease_definition_generator] ANTHROPIC_API_KEY environment variable is not set")
-            raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
+            # Initialize embedding model only if not already initialized
+            if self._embed_model is None:
+                self._embed_model, self._embedding_dimension = get_embedding_model()
+                logger.info(f"[disease_definition_generator] Embedding model initialized")
+                logger.info(f"[disease_definition_generator] Embedding dimension: {self._embedding_dimension}")
 
-        # Initialize embedding model
-        self.embed_model, self.embedding_dimension = get_embedding_model()
-        logger.info(f"[disease_definition_generator] Embedding model initialized with {self.embed_model.model_name}")
-        logger.info(f"[disease_definition_generator] Embedding dimension: {self.embedding_dimension}")
+            # Initialize LLM predictor only if not already initialized
+            if self._llm is None:
+                self._llm = Anthropic(
+                    api_key=self.ANTHROPIC_API_KEY,
+                    model="claude-3-5-sonnet-20241022",
+                    temperature=0,
+                    max_tokens=2000
+                )
+                logger.info("[disease_definition_generator] LLM predictor initialized with Claude")
 
-        # Initialize LLM predictor
-        self.llm = Anthropic(
-            api_key=self.ANTHROPIC_API_KEY,
-            model="claude-3-5-sonnet-20241022",
-            temperature=0,
-            max_tokens=2000
-        )
-        logger.info("[disease_definition_generator] LLM predictor initialized with Claude")
+            # Configure settings
+            Settings.embed_model = self._embed_model
+            Settings.llm = self._llm
+            logger.info("[disease_definition_generator] Global settings configured")
 
-        # Configure settings
-        Settings.embed_model = self.embed_model
-        Settings.llm = self.llm
-        logger.info("[disease_definition_generator] Global settings configured with embedding model and LLM")
+            # Initialize prompt template
+            self._prompt_template = (
+                "Please provide a detailed definition of the disease '{disease_name}' in the following JSON format. "
+                "Make sure to include all required fields and follow the exact format:\n\n"
+                "{{\n"
+                '  "name": "{disease_name}",\n'
+                '  "alternateNames": ["string"],\n'
+                '  "icd10": "A00.0",\n'
+                '  "isGlobal": true,\n'
+                '  "symptoms": [\n'
+                '    {{\n'
+                '      "name": "string",\n'
+                '      "commonality": "VERY_COMMON",\n'
+                '      "severity": "MILD"\n'
+                '    }}\n'
+                '  ],\n'
+                '  "labResults": [\n'
+                '    {{\n'
+                '      "name": "string",\n'
+                '      "unit": "string",\n'
+                '      "normalRange": "string",\n'
+                '      "significance": "string"\n'
+                '    }}\n'
+                '  ],\n'
+                '  "diagnosticProcedures": [\n'
+                '    {{\n'
+                '      "name": "string",\n'
+                '      "accuracy": 0.95,\n'
+                '      "invasiveness": "NON_INVASIVE"\n'
+                '    }}\n'
+                '  ],\n'
+                '  "treatments": [\n'
+                '    {{\n'
+                '      "name": "string",\n'
+                '      "type": "MEDICATION",\n'
+                '      "effectiveness": 0.85\n'
+                '    }}\n'
+                '  ],\n'
+                '  "prognosis": {{\n'
+                '    "survivalRate": 0.8,\n'
+                '    "chronicityLevel": "ACUTE",\n'
+                '    "qualityOfLifeImpact": "MILD"\n'
+                '  }}\n'
+                "}}\n\n"
+                "Please ensure the response is valid JSON and includes accurate medical information for {disease_name}. "
+                "The values should be based on current medical knowledge and research."
+            )
+            logger.info("[disease_definition_generator] Prompt template initialized")
 
-        # Initialize prompt template
-        self.prompt_template = (
-            "Please provide a detailed definition of the disease '{disease_name}' in the following JSON format. "
-            "Make sure to include all required fields and follow the exact format:\n\n"
-            "{{\n"
-            '  "name": "{disease_name}",\n'
-            '  "alternateNames": ["string"],\n'
-            '  "icd10": "A00.0",\n'
-            '  "isGlobal": true,\n'
-            '  "symptoms": [\n'
-            '    {{\n'
-            '      "name": "string",\n'
-            '      "commonality": "VERY_COMMON",\n'
-            '      "severity": "MILD"\n'
-            '    }}\n'
-            '  ],\n'
-            '  "labResults": [\n'
-            '    {{\n'
-            '      "name": "string",\n'
-            '      "unit": "string",\n'
-            '      "normalRange": "string",\n'
-            '      "significance": "string"\n'
-            '    }}\n'
-            '  ],\n'
-            '  "diagnosticProcedures": [\n'
-            '    {{\n'
-            '      "name": "string",\n'
-            '      "accuracy": 0.95,\n'
-            '      "invasiveness": "NON_INVASIVE"\n'
-            '    }}\n'
-            '  ],\n'
-            '  "treatments": [\n'
-            '    {{\n'
-            '      "name": "string",\n'
-            '      "type": "MEDICATION",\n'
-            '      "effectiveness": 0.85\n'
-            '    }}\n'
-            '  ],\n'
-            '  "prognosis": {{\n'
-            '    "survivalRate": 0.8,\n'
-            '    "chronicityLevel": "ACUTE",\n'
-            '    "qualityOfLifeImpact": "MILD"\n'
-            '  }}\n'
-            "}}\n\n"
-            "Please ensure the response is valid JSON and includes accurate medical information for {disease_name}. "
-            "The values should be based on current medical knowledge and research."
-        )
-        logger.info("[disease_definition_generator] Prompt template initialized")
+            self._initialized = True
+            logger.info("[disease_definition_generator] DiseaseDefinitionEngine initialized successfully")
 
-        # Set initialization flag
-        self._initialized = True
-        logger.info("[disease_definition_generator] DiseaseDefinitionEngine initialized successfully")
+        except Exception as e:
+            logger.error(f"[disease_definition_generator] Engine initialization failed: {str(e)}")
+            raise
+
+    @property
+    def embed_model(self):
+        """Get the embedding model."""
+        return self._embed_model
+
+    @property
+    def embedding_dimension(self):
+        """Get the embedding dimension."""
+        return self._embedding_dimension
+
+    @property
+    def llm(self):
+        """Get the LLM model."""
+        return self._llm
+
+    @property
+    def prompt_template(self):
+        """Get the prompt template."""
+        return self._prompt_template
 
     def load_index(self) -> Optional[VectorStoreIndex]:
         """Load the index from storage if it exists."""
