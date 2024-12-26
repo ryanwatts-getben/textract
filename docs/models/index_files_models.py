@@ -1,5 +1,5 @@
 """
-Models for the document indexing endpoint
+Models for the /index_files endpoint
 """
 from flask_restx import fields
 

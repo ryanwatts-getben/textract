@@ -1,12 +1,12 @@
 """
-Documentation for the /index endpoint for document indexing
+Documentation for the /index_files endpoint
 """
 from flask_restx import Resource
 
 def register_index_files_endpoint(ns, models):
     """Register the document indexing endpoint with the given namespace"""
 
-    @ns.route('/index')
+    @ns.route('/')
     class IndexFiles(Resource):
         """Endpoint for indexing documents"""
 
@@ -21,6 +21,8 @@ def register_index_files_endpoint(ns, models):
             
             This endpoint accepts a list of documents and creates a searchable index for later analysis.
             The documents are processed and stored in a vector database for efficient semantic search.
+            
+            The endpoint will be available at: http://localhost:5001/index_files
             
             Example request:
             {
