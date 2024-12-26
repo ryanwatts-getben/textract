@@ -1191,21 +1191,39 @@ class BeginScan(Resource):
             logger.info("[app] Request payload:")
             logger.info(json.dumps(data, indent=2))
             
+            start_time = time.time()
+            
             # Call the scan_documents function
             result = scan_documents(data)
+            
+            processing_time = time.time() - start_time
             
             logger.info("[app] Scan completed")
             logger.info("[app] Response:")
             logger.info(json.dumps(result, indent=2))
             
-            return result, 200
+            # Ensure response matches the beginScan_response model
+            response = {
+                'status': result.get('status', 'error'),
+                'message': result.get('message', ''),
+                'results': result.get('results', []),
+                'processing_time': processing_time,
+                'total_diseases': result.get('total_diseases', 0),
+                'successful_diseases': result.get('successful_diseases', 0)
+            }
+            
+            return response, 200 if response['status'] == 'success' else 500
             
         except Exception as e:
             error_msg = str(e)
             logger.error(f"[app] Error processing scan request: {error_msg}", exc_info=True)
             return {
                 'status': 'error',
-                'message': error_msg
+                'message': error_msg,
+                'results': [],
+                'processing_time': 0,
+                'total_diseases': 0,
+                'successful_diseases': 0
             }, 500
 
 if __name__ == '__main__':

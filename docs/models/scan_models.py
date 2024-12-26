@@ -34,9 +34,19 @@ def init_scan_models(api):
         'scoring_summary': fields.Raw(description='Summary of scoring results')
     })
 
+    begin_scan_response = api.model('BeginScanResponse', {
+        'status': fields.String(description='Status of the scan operation'),
+        'message': fields.String(description='Descriptive message about the operation'),
+        'results': fields.List(fields.Raw, description='List of scan results'),
+        'processing_time': fields.Float(description='Time taken to process the scan'),
+        'total_diseases': fields.Integer(description='Total number of diseases processed'),
+        'successful_diseases': fields.Integer(description='Number of diseases successfully processed')
+    })
+
     return {
         'scan_request': scan_request,
         'finding_match': finding_match,
         'disease_match': disease_match,
-        'scan_response': scan_response
+        'scan_response': scan_response,
+        'beginScan_response': begin_scan_response
     } 
