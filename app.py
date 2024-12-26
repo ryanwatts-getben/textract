@@ -19,7 +19,7 @@ import csv
 import torch
 
 # Third-party imports
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 from flask_cors import CORS
 import boto3
 from botocore.exceptions import ClientError
@@ -37,10 +37,9 @@ from llama_index.core import (
 from llama_index.llms.anthropic import Anthropic
 
 # Local imports
-from swagger_config import (
-    api, scrape_ns, scan_ns, scrape_request, scrape_response, 
-    scrape_multiple_response, error_response, scan_request, scan_response
-)
+from docs.swagger_config import api, scrape_ns, scan_ns
+from docs.models.scan_models import init_scan_models
+from docs.models.scrape_models import init_scrape_models
 from rag import create_index, preprocess_document
 from ragindex import process_user_projects
 from disease_definition_generator import generate_multiple_definitions, get_embedding_model
@@ -78,7 +77,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+app = Flask(__name__, 
+    static_folder='docs/static'  # Keep static folder for custom CSS
+)
+CORS(app)
+
+# Configure Swagger UI
+app.config.update({
+    'SWAGGER_UI_DOC_EXPANSION': 'full',
+    'SWAGGER_UI_JSONEDITOR': True,
+    'SWAGGER_UI_OPERATION_ID': True,
+    'SWAGGER_UI_REQUEST_DURATION': True,
+    'RESTX_MASK_SWAGGER': False,  # Show all fields in models
+    'RESTX_ERROR_404_HELP': False  # Cleaner 404 messages
+})
+
+# Initialize Swagger documentation
+api.init_app(app)
+
+# Initialize models
+scan_models = init_scan_models(api)
+scrape_models = init_scrape_models(api)
+
+# Redirect root to Swagger UI
+@app.route('/')
+def index():
+    return redirect('/swagger')
 
 def configure_cuda_memory_limit(fraction=CUDA_MEMORY_FRACTION, device=CUDA_DEVICE):
     if torch.cuda.is_available():

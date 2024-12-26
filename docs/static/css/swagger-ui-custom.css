@@ -1,0 +1,102 @@
+/* Custom styles for Swagger UI */
+
+/* Always show copy button - target all possible scenarios */
+.swagger-ui .copy-to-clipboard,
+.swagger-ui button.copy-to-clipboard,
+.swagger-ui .model .model-box .copy-to-clipboard,
+.swagger-ui .opblock .opblock-section-header .copy-to-clipboard,
+.swagger-ui .opblock-description .copy-to-clipboard,
+.swagger-ui .response-col_description .copy-to-clipboard,
+.swagger-ui .tab-item .copy-to-clipboard,
+.swagger-ui .response .copy-to-clipboard,
+.swagger-ui .model-example .copy-to-clipboard,
+.swagger-ui .prop-format .copy-to-clipboard {
+    display: inline-flex !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    position: relative !important;
+    z-index: 10 !important;
+    background-color: #f0f0f0 !important;
+    border: 1px solid #ebebeb !important;
+    border-radius: 4px !important;
+    padding: 4px 8px !important;
+    margin: 0 0 0 8px !important;
+    cursor: pointer !important;
+    transition: all 0.3s ease !important;
+}
+
+/* Override any hover states that might hide the button */
+.swagger-ui *:hover>.copy-to-clipboard,
+.swagger-ui .opblock:hover .copy-to-clipboard,
+.swagger-ui .model:hover .copy-to-clipboard,
+.swagger-ui .response:hover .copy-to-clipboard {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* Ensure copy button container is visible */
+.swagger-ui .opblock-section-header,
+.swagger-ui .model-box,
+.swagger-ui .response-col_description,
+.swagger-ui .highlight-code,
+.swagger-ui .model,
+.swagger-ui .response,
+.swagger-ui .tab-item,
+.swagger-ui .opblock-description {
+    position: relative !important;
+    overflow: visible !important;
+}
+
+/* Force models to stay expanded */
+.swagger-ui .models .model-container,
+.swagger-ui .models .model-container.collapsed {
+    margin: 0 !important;
+    display: block !important;
+}
+
+.swagger-ui .models .model-container .model-box {
+    display: block !important;
+}
+
+/* Keep arrow indicators correct */
+.swagger-ui .models .model-container .model-toggle[aria-expanded="true"],
+.swagger-ui .model-toggle.expanded {
+    transform: rotate(90deg) !important;
+}
+
+/* Better spacing and visibility */
+.swagger-ui .opblock .opblock-summary {
+    padding: 8px !important;
+}
+
+.swagger-ui .opblock-description-wrapper p {
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+}
+
+.swagger-ui .parameters-container {
+    padding: 15px !important;
+}
+
+/* Highlight required fields */
+.swagger-ui .required {
+    font-weight: bold !important;
+    color: #e53935 !important;
+}
+
+/* Ensure models section stays expanded */
+.swagger-ui section.models .model-container {
+    margin: 0 !important;
+}
+
+.swagger-ui section.models.is-open {
+    padding: 10px !important;
+}
+
+/* Better hover effects */
+.swagger-ui .copy-to-clipboard:hover {
+    background-color: #e0e0e0 !important;
+    border-color: #d0d0d0 !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+}
