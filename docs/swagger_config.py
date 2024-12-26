@@ -11,7 +11,6 @@ api = Api(
     doc='/swagger',
     ordered=True,
     validate=True,
-    prefix='/api/v1',
     # Swagger UI configuration
     swagger_ui_bundle_js='https://unpkg.com/swagger-ui-dist@5.9.0/swagger-ui-bundle.js',
     swagger_ui_css='https://unpkg.com/swagger-ui-dist@5.9.0/swagger-ui.css',
@@ -21,27 +20,12 @@ api = Api(
         'filter': True,
         'showExtensions': True,
         'showCommonExtensions': True,
-        'defaultModelsExpandDepth': -1,
+        'defaultModelsExpandDepth': 5,
         'defaultModelExpandDepth': 5,
         'defaultModelRendering': 'model',
         'docExpansion': 'full',
         'tryItOutEnabled': True,
         'displayOperationId': True,
-                'customCss': '''
-            .swagger-ui .copy-to-clipboard {
-                display: inline-flex !important;
-                opacity: 1 !important;
-                visibility: visible !important;
-                background-color: #f0f0f0 !important;
-                position: relative !important;
-                cursor: pointer;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                padding: 4px 8px;
-                margin-left: 8px;
-            }
-        ''',
-        'customJs': '/static/js/swagger-custom.js',
         'maxDisplayedTags': None,
         'showExtensions': True,
         'showCommonExtensions': True
@@ -49,25 +33,52 @@ api = Api(
 )
 
 # Create namespaces
+root_ns = api.namespace('root', description='Root endpoint operations')
 scrape_ns = api.namespace('scrape', description='Web scraping operations')
 scan_ns = api.namespace('scan', description='Document scanning and analysis operations')
+index_files_ns = api.namespace('index_files', description='Document indexing operations')
+query_ns = api.namespace('query', description='Document querying operations')
+disease_ns = api.namespace('disease', description='Disease definition operations')
+report_ns = api.namespace('reports', description='Report generation operations')
 
 # Import and initialize models
 from .models.common_models import init_common_models
 from .models.scan_models import init_scan_models
 from .models.scrape_models import init_scrape_models
+from .models.index_files_models import init_index_files_models
+from .models.query_models import init_query_models
+from .models.disease_models import init_disease_models
+from .models.report_models import init_report_models
 
 common_models = init_common_models(api)
 scan_models = init_scan_models(api)
 scrape_models = init_scrape_models(api)
+index_files_models = init_index_files_models(api)
+query_models = init_query_models(api)
+disease_models = init_disease_models(api)
+report_models = init_report_models(api)
 
 # Combine models with common models
 scan_models.update(common_models)
 scrape_models.update(common_models)
+index_files_models.update(common_models)
+query_models.update(common_models)
+disease_models.update(common_models)
+report_models.update(common_models)
 
 # Import and register endpoints
+from .endpoints.root import register_root_endpoint
 from .endpoints.beginScan import register_beginScan_endpoint
 from .endpoints.scrape import register_scrape_endpoint
+from .endpoints.index_files import register_index_files_endpoint
+from .endpoints.query import register_query_endpoint
+from .endpoints.disease import register_disease_endpoint
+from .endpoints.report import register_report_endpoint
 
+register_root_endpoint(root_ns, common_models)
 register_beginScan_endpoint(scan_ns, scan_models)
-register_scrape_endpoint(scrape_ns, scrape_models) 
+register_scrape_endpoint(scrape_ns, scrape_models)
+register_index_files_endpoint(index_files_ns, index_files_models)
+register_query_endpoint(query_ns, query_models)
+register_disease_endpoint(disease_ns, disease_models)
+register_report_endpoint(report_ns, report_models) 

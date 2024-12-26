@@ -100,7 +100,7 @@ scan_models = init_scan_models(api)
 scrape_models = init_scrape_models(api)
 
 # Redirect root to Swagger UI
-@app.route('/')
+@app.route('/index')
 def index():
     return redirect('/swagger')
 
