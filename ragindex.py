@@ -471,73 +471,37 @@ def create_project_index(
 ### 5. Batch Processing System
 
 def process_user_projects(s3_client, bucket_name: str, user_id: str, force_refresh: bool = False) -> Dict[str, str]:
-    """
-    Processes all projects for a specific user:
-    - Gets projects for the specified user
-    - For each project, tries to create index (if not present or force_refresh)
-    - Logs results and returns a report
-
-    Returns a dict of:
-    {
-        "projectId": "success"|"skipped"|"failed"
-    }
-    """
-    logger.info(f"[process_user_projects] Starting processing for user: {user_id} in bucket: {bucket_name}, force_refresh: {force_refresh}")
-    project_ids = list_project_ids_for_user(s3_client, bucket_name, user_id)
-    total_projects = len(project_ids)
-    logger.info(f"[process_user_projects] Total projects to process for user {user_id}: {total_projects}")
+    """Process all projects for a given user."""
+    logger.info(f"[process_user_projects] Processing projects for user: {user_id}")
+    results = {}
     
-    project_count = 0
-    success_count = 0
-    failure_count = 0
-    skipped_count = 0
-
-    report = {}
-
-    start_time = time.time()
-    for project_id in project_ids:
-        project_count += 1
-        elapsed = time.time() - start_time
-        projects_left = total_projects - project_count
-        est_time_remaining = (elapsed / project_count) * projects_left if project_count else 0
-        logger.info(f"[process_user_projects] Processing project {project_id} ({project_count}/{total_projects}). "
-                    f"Elapsed: {elapsed:.2f}s, Est. Remaining: {est_time_remaining:.2f}s")
+    try:
+        # List all projects for the user
+        projects = list_project_ids_for_user(s3_client, bucket_name, user_id)
+        logger.info(f"[process_user_projects] Found {len(projects)} projects for user {user_id}")
         
-        try:
-            # Check if index exists before attempting creation
-            index_exists = False
+        for project_id in projects:
+            logger.info(f"[process_user_projects] Found active project: {project_id}")
+            
+            # Check if index exists
+            index_key = f"{user_id}/{project_id}/index.pkl"
             try:
-                s3_client.head_object(Bucket=bucket_name, Key=get_index_path(user_id, project_id))
-                index_exists = True
-            except ClientError:
-                index_exists = False
+                s3_client.head_object(Bucket=bucket_name, Key=index_key)
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    logger.warning(f"[process_user_projects] Project {project_id} has no index")
+                    continue
+                else:
+                    logger.error(f"[process_user_projects] Error checking index for project {project_id}: {str(e)}")
+                    continue
+                    
+            results[project_id] = "active"
             
-            # Skip if index exists and we're not forcing refresh
-            if index_exists and not force_refresh:
-                report[project_id] = "skipped"
-                skipped_count += 1
-                logger.info(f"[process_user_projects] Index already exists for project {project_id}. Skipped creation.")
-                continue
-            
-            # Attempt to create/update index
-            if create_project_index(s3_client, bucket_name, user_id, project_id, force_refresh=force_refresh):
-                report[project_id] = "success"
-                success_count += 1
-                logger.info(f"[process_user_projects] Index successfully created for project {project_id}")
-            else:
-                report[project_id] = "failed"
-                failure_count += 1
-                logger.error(RAG_ERROR_MESSAGES["index_creation_failed"].format(user_id=user_id, project_id=project_id))
-                
-        except Exception as e:
-            logger.error(RAG_ERROR_MESSAGES["project_processing_error"].format(project_id=project_id, error=str(e)))
-            report[project_id] = "failed"
-            failure_count += 1
-
-    logger.info(f"[process_user_projects] Processing complete for user {user_id}. "
-                f"Success: {success_count}, Failed: {failure_count}, Skipped: {skipped_count} out of {total_projects}")
-    logger.debug(f"[process_user_projects] Final report: {report}")
-    return report
+        return results
+        
+    except Exception as e:
+        logger.error(f"[process_user_projects] Error processing user projects: {str(e)}")
+        return results
 
 ### 6. Error Handling
 # Already integrated into try/except blocks and logging.

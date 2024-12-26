@@ -36,8 +36,16 @@ from sentence_transformers import SentenceTransformer
 from llama_index.embeddings.langchain import LangchainEmbedding
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.propagate = False  # Prevent propagation to root logger
+
+# Only add handler if none exist
+if not logger.handlers:
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s] %(message)s')
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 # Supported file types
 SUPPORTED_EXTENSIONS = {'.txt', '.pdf', '.json', '.xml', '.xsd', '.doc', '.docx', '.csv', '.rrf'}
@@ -610,13 +618,16 @@ def format_scan_response(scan_results: Dict, mass_tort_name: str, disease_name: 
 def create_index(documents: List[Document], cache_dir: Optional[str] = None) -> VectorStoreIndex:
     """Create a new vector store index from the provided documents."""
     try:
-        logger.info(f"[create_index] Starting index creation with {len(documents)} documents.")
+        logger.info(f"[create_index] Starting index creation with {len(documents)} documents")
+        logger.info(f"[create_index] Document types: {[type(doc).__name__ for doc in documents]}")
         
         # Initialize embedding model
+        logger.info("[create_index] Initializing embedding model...")
         embed_model = get_embedding_model()
-        logger.info("[create_index] Creating VectorStoreIndex with provided documents")
+        logger.info("[create_index] Embedding model initialized successfully")
         
         # Create the index
+        logger.info("[create_index] Creating VectorStoreIndex with provided documents...")
         index = VectorStoreIndex.from_documents(
             documents,
             embed_model=embed_model,
@@ -627,34 +638,37 @@ def create_index(documents: List[Document], cache_dir: Optional[str] = None) -> 
         # Cache the index locally if cache_dir is provided
         if cache_dir:
             try:
+                logger.info(f"[create_index] Attempting to cache index to directory: {cache_dir}")
                 os.makedirs(cache_dir, exist_ok=True)
                 cache_path = os.path.join(cache_dir, 'vector_index.pkl')
                 
                 # Save locally first
+                logger.info("[create_index] Saving index to local cache...")
                 with open(cache_path, 'wb') as f:
                     pickle.dump(index, f)
-                logger.info("[create_index] Created and cached new vector index locally")
+                logger.info(f"[create_index] Index cached successfully to: {cache_path}")
 
                 # Upload to S3 if configured
                 try:
                     s3_client = boto3.client('s3')
                     bucket_name = os.getenv('AWS_UPLOAD_BUCKET_NAME')
                     if bucket_name:
+                        logger.info(f"[create_index] Uploading index to S3 bucket: {bucket_name}")
                         s3_client.upload_file(cache_path, bucket_name, '00000/22222/index.pkl')
                         logger.info("[create_index] Index uploaded to S3 successfully")
                 except Exception as s3_error:
-                    logger.error(f"[create_index] Error uploading to S3: {str(s3_error)}")
+                    logger.error(f"[create_index] Error uploading to S3: {str(s3_error)}", exc_info=True)
                     # Continue even if S3 upload fails
                 
             except Exception as cache_error:
-                logger.error(f"[create_index] Error caching index: {str(cache_error)}")
+                logger.error(f"[create_index] Error caching index: {str(cache_error)}", exc_info=True)
                 # Continue even if caching fails
         
-        logger.info("[create_index] Index creation completed, proceeding with document scanning")
+        logger.info("[create_index] Index creation completed successfully")
         return index
 
     except Exception as e:
-        logger.error(f"[create_index] Error creating index: {str(e)}")
+        logger.error(f"[create_index] Error creating index: {str(e)}", exc_info=True)
         raise
 
 def scan_documents(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -662,11 +676,14 @@ def scan_documents(data: Dict[str, Any]) -> Dict[str, Any]:
     Scan documents for disease criteria.
     """
     try:
-        logger.info("[disease_definition_generator] Starting document scan")
+        logger.info("[disease_definition_generator] Starting document scan with payload size: %d bytes", len(str(data)))
         
         # Extract necessary data
         documents = data.get('documents', [])
         disease_criteria = data.get('disease_criteria', {})
+        
+        logger.info("[disease_definition_generator] Received %d documents for scanning", len(documents))
+        logger.info("[disease_definition_generator] Disease criteria: %s", json.dumps(disease_criteria, indent=2))
         
         if not documents:
             logger.error("[disease_definition_generator] No documents provided for scanning")
@@ -677,10 +694,11 @@ def scan_documents(data: Dict[str, Any]) -> Dict[str, Any]:
             
         # Create or load index
         try:
+            logger.info("[disease_definition_generator] Creating document index...")
             index = create_index(documents)
-            logger.info("[disease_definition_generator] Index ready for scanning")
+            logger.info("[disease_definition_generator] Index created successfully")
         except Exception as e:
-            logger.error(f"[disease_definition_generator] Error preparing index: {str(e)}")
+            logger.error(f"[disease_definition_generator] Error preparing index: {str(e)}", exc_info=True)
             return {
                 'status': 'error',
                 'message': f'Error preparing document index: {str(e)}'
@@ -688,27 +706,30 @@ def scan_documents(data: Dict[str, Any]) -> Dict[str, Any]:
         
         # Perform the scan using the index
         try:
+            logger.info("[disease_definition_generator] Beginning disease scan with criteria...")
             scan_results = scan_for_disease(documents, disease_criteria, index.embed_model)
-            logger.info("[disease_definition_generator] Document scan completed successfully")
+            logger.info("[disease_definition_generator] Scan completed with results: %s", json.dumps(scan_results, indent=2))
             
             # Format the response
+            logger.info("[disease_definition_generator] Formatting scan response...")
             response = format_scan_response(
                 scan_results=scan_results,
                 mass_tort_name=disease_criteria.get('mass_tort_name', 'Unknown Mass Tort'),
                 disease_name=disease_criteria.get('disease_name', 'Unknown Disease')
             )
             
+            logger.info("[disease_definition_generator] Scan completed successfully. Response size: %d bytes", len(str(response)))
             return response
             
         except Exception as e:
-            logger.error(f"[disease_definition_generator] Error during document scan: {str(e)}")
+            logger.error(f"[disease_definition_generator] Error during document scan: {str(e)}", exc_info=True)
             return {
                 'status': 'error',
                 'message': f'Error scanning documents: {str(e)}'
             }
             
     except Exception as e:
-        logger.error(f"[disease_definition_generator] Error in scan_documents: {str(e)}")
+        logger.error(f"[disease_definition_generator] Error in scan_documents: {str(e)}", exc_info=True)
         return {
             'status': 'error',
             'message': str(e)
