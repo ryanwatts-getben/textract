@@ -14,7 +14,6 @@ from typing import List, Optional, Tuple, Dict, Any
 from pathlib import Path
 import shutil
 from pypdf import PdfReader
-# import docx  # Changed from docx.document import Document
 import csv
 import torch
 
@@ -26,7 +25,7 @@ from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import ParseError
-# from defusedxml import ElementTree as DefusedET
+from flask_restx import Resource
 
 # LlamaIndex imports
 from llama_index.core import (
@@ -43,27 +42,7 @@ from docs.models.scrape_models import init_scrape_models
 from rag import create_index, preprocess_document
 from ragindex import process_user_projects
 from disease_definition_generator import generate_multiple_definitions, get_embedding_model
-from app_rag_disease_config import (
-    ENV_PATH,
-    AWS_UPLOAD_BUCKET_NAME,
-    ALLOWED_ORIGINS,
-    CORS_CONFIG,
-    SUPPORTED_EXTENSIONS,
-    DEFAULT_USER_ID,
-    DEFAULT_PROJECT_ID,
-    MAX_WORKERS,
-    CUDA_MEMORY_FRACTION,
-    CUDA_DEVICE,
-    LLM_MODEL,
-    QUERY_ENGINE_CONFIG,
-    LOG_CONFIG,
-    SERVER_CONFIG,
-    DocumentConfig,
-    ERROR_MESSAGES,
-    TEMP_DIR_PREFIX,
-    INDEX_CACHE_FILENAME,
-    INDEX_METADATA_FILENAME
-)
+from app_rag_disease_config import *
 from scrape import scrape_medline_plus
 from scan import scan_documents, ScanInput
 
@@ -71,17 +50,29 @@ from scan import scan_documents, ScanInput
 load_dotenv(dotenv_path=ENV_PATH)
 
 # Set up logging
-logging.basicConfig(
-    level=getattr(logging, LOG_CONFIG["level"]),
-    format=LOG_CONFIG["format"]
-)
 logger = logging.getLogger(__name__)
+logger.propagate = False  # Prevent propagation to root logger
+
+# Only add handler if none exist
+if not logger.handlers:
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s] %(message)s')
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+# Configure other loggers to WARNING to reduce noise
+for log_name in ["werkzeug", "scan"]:
+    other_logger = logging.getLogger(log_name)
+    other_logger.propagate = False  # Prevent propagation to root logger
+    if not other_logger.handlers:
+        other_logger.addHandler(handler)
+    other_logger.setLevel(logging.INFO)
 
 app = Flask(__name__, 
     static_folder='docs/static'  # Keep static folder for custom CSS
 )
 CORS(app)
-
 # Configure Swagger UI
 app.config.update({
     'SWAGGER_UI_DOC_EXPANSION': 'full',
@@ -1016,59 +1007,126 @@ def scrape_disease_info():
         }), 500
 
 @app.route('/beginScan', methods=['POST'])
-def begin_scan():
+def beginScan():
     """
     Endpoint to begin scanning documents for mass tort analysis.
     """
     try:
         logger.info("[app] Received scan request")
         data = request.get_json()
+        
+        # Log the raw request data
+        logger.info("[app] Raw request data:")
+        logger.info(json.dumps(data, indent=2))
+        
         if not data:
             logger.error("[app] No JSON data provided")
-            return jsonify({
+            error_response = {
                 'status': 'error',
-                'message': 'No JSON data provided'
-            }), 400
+                'message': 'No JSON data provided',
+                'results': [],
+                'processing_time': 0,
+                'total_diseases': 0,
+                'successful_diseases': 0
+            }
+            logger.error("[app] Returning error response:")
+            logger.error(json.dumps(error_response, indent=2))
+            return jsonify(error_response), 400
 
         # Validate required fields
         required_fields = ['userId', 'projectId', 'massTorts']
         missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
             logger.error(f"[app] Missing required fields: {missing_fields}")
-            return jsonify({
+            error_response = {
                 'status': 'error',
-                'message': f'Missing required fields: {", ".join(missing_fields)}'
-            }), 400
+                'message': f'Missing required fields: {", ".join(missing_fields)}',
+                'results': [],
+                'processing_time': 0,
+                'total_diseases': 0,
+                'successful_diseases': 0
+            }
+            logger.error("[app] Returning error response:")
+            logger.error(json.dumps(error_response, indent=2))
+            return jsonify(error_response), 400
 
-        logger.info(f"[app] Starting scan for project {data['projectId']}")
-        logger.info(f"[app] Processing {len(data['massTorts'])} mass torts")
+        # Log detailed information about the request
+        logger.info(f"[app] Processing scan for User ID: {data['userId']}")
+        logger.info(f"[app] Project ID: {data['projectId']}")
+        
+        for mass_tort in data['massTorts']:
+            logger.info(f"[app] Processing Mass Tort: {mass_tort.get('officialName', 'Unknown')} (ID: {mass_tort.get('id', 'Unknown')})")
+            diseases = mass_tort.get('diseases', [])
+            logger.info(f"[app] Found {len(diseases)} diseases to process")
+            
+            for disease in diseases:
+                logger.info(f"[app] Disease: {disease.get('name', 'Unknown')} (ID: {disease.get('id', 'Unknown')})")
+                logger.info(f"[app] - Symptoms: {len(disease.get('symptoms', []))} items")
+                logger.info(f"[app] - Lab Results: {len(disease.get('labResults', []))} items")
+                logger.info(f"[app] - Diagnostic Procedures: {len(disease.get('diagnosticProcedures', []))} items")
+                logger.info(f"[app] - Risk Factors: {len(disease.get('riskFactors', []))} items")
         
         # Process the scan with validated data
         try:
+            logger.info("[app] Calling scan_documents function from scan.py")
             result = scan_documents(data)
+            
+            # Log the complete response for debugging
+            logger.info("[app] Scan result:")
+            logger.info(json.dumps(result, indent=2))
+            
+            if not result:
+                logger.error("[app] scan_documents returned None or empty result")
+                error_response = {
+                    'status': 'error',
+                    'message': 'Scan returned no result',
+                    'results': [],
+                    'processing_time': 0,
+                    'total_diseases': 0,
+                    'successful_diseases': 0
+                }
+                logger.error("[app] Returning error response:")
+                logger.error(json.dumps(error_response, indent=2))
+                return jsonify(error_response), 500
             
             if result.get('status') == 'error':
                 logger.error(f"[app] Scan failed: {result.get('message')}")
+                logger.error("[app] Returning error response from scan_documents:")
+                logger.error(json.dumps(result, indent=2))
                 return jsonify(result), 500
                 
             logger.info("[app] Scan completed successfully")
+            logger.info("[app] Returning success response:")
+            logger.info(json.dumps(result, indent=2))
             return jsonify(result), 200
             
         except Exception as scan_error:
-            error_msg = f"Error during document scan: {str(scan_error)}"
-            logger.error(f"[app] {error_msg}")
-            return jsonify({
+            logger.error(f"[app] Error during document scan: {str(scan_error)}", exc_info=True)
+            error_response = {
                 'status': 'error',
-                'message': error_msg
-            }), 500
+                'message': f'Error during document scan: {str(scan_error)}',
+                'results': [],
+                'processing_time': 0,
+                'total_diseases': 0,
+                'successful_diseases': 0
+            }
+            logger.error("[app] Returning error response:")
+            logger.error(json.dumps(error_response, indent=2))
+            return jsonify(error_response), 500
 
     except Exception as e:
-        error_msg = f"Error processing scan request: {str(e)}"
-        logger.error(f"[app] {error_msg}")
-        return jsonify({
+        logger.error(f"[app] Error processing scan request: {str(e)}", exc_info=True)
+        error_response = {
             'status': 'error',
-            'message': error_msg
-        }), 500
+            'message': str(e),
+            'results': [],
+            'processing_time': 0,
+            'total_diseases': 0,
+            'successful_diseases': 0
+        }
+        logger.error("[app] Returning error response:")
+        logger.error(json.dumps(error_response, indent=2))
+        return jsonify(error_response), 500
 
 @app.route('/api/disease-scanner/reports/generate-report', methods=['POST'])
 def generate_report():
@@ -1115,6 +1173,40 @@ def generate_report():
             'status': 'error',
             'message': str(e)
         }), 500
+
+# Register the beginScan endpoint
+@scan_ns.route('/beginScan')
+class BeginScan(Resource):
+    @scan_ns.expect(scan_models['scan_request'])
+    @scan_ns.response(200, 'Success', scan_models['beginScan_response'])
+    @scan_ns.response(400, 'Invalid request')
+    @scan_ns.response(500, 'Internal server error')
+    def post(self):
+        """
+        Scan medical documents for disease evidence
+        """
+        try:
+            data = request.get_json()
+            logger.info("[app] Received scan request")
+            logger.info("[app] Request payload:")
+            logger.info(json.dumps(data, indent=2))
+            
+            # Call the scan_documents function
+            result = scan_documents(data)
+            
+            logger.info("[app] Scan completed")
+            logger.info("[app] Response:")
+            logger.info(json.dumps(result, indent=2))
+            
+            return result, 200
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"[app] Error processing scan request: {error_msg}", exc_info=True)
+            return {
+                'status': 'error',
+                'message': error_msg
+            }, 500
 
 if __name__ == '__main__':
     # Initialize multiprocessing support
