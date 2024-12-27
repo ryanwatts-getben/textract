@@ -39,7 +39,6 @@ def get_mass_tort_data(
     """
     try:
         with get_session() as db:
-            # Build the SQL query to fetch mass tort data
             query = text("""
                 WITH mass_tort_diseases AS (
                     SELECT 
