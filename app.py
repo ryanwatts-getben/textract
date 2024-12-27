@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import  Optional, Tuple, Dict, Any
 import shutil
 from pypdf import PdfReader
-# import docx  # Changed from docx.document import Document
 import csv
 import torch
 from sqlalchemy import create_engine, text
@@ -26,7 +25,6 @@ from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 import xml.etree.ElementTree as ET
 from xml.etree.ElementTree import ParseError
-# from defusedxml import ElementTree as DefusedET
 
 # LlamaIndex imports
 from llama_index.core import (
@@ -39,8 +37,6 @@ from llama_index.llms.anthropic import Anthropic
 # Local imports
 import db
 from docs.swagger_config import api, scrape_ns, scan_ns
-from docs.models.scan_models import init_scan_models
-from docs.models.scrape_models import init_scrape_models
 from examplequery import get_mass_tort_data, get_disease_project_by_status, update_disease_project_status , get_mass_torts_by_user_id, get_disease_project, create_disease_project
 from rag import create_index, preprocess_document
 from ragindex import process_user_projects

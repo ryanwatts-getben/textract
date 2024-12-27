@@ -41,34 +41,6 @@ query_ns = api.namespace('', description='Document querying operations')
 disease_ns = api.namespace('', description='Disease definition operations')
 report_ns = api.namespace('api/disease-scanner/reports', description='Report generation operations')
 
-# Import and initialize models
-from .models.common_models import init_common_models
-from .models.root_models import init_root_models
-from .models.scan_models import init_scan_models
-from .models.scrape_models import init_scrape_models
-from .models.index_models import init_index_models
-from .models.query_models import init_query_models
-from .models.disease_models import init_disease_models
-from .models.report_models import init_report_models
-
-common_models = init_common_models(api)
-root_models = init_root_models(api)
-scan_models = init_scan_models(api)
-scrape_models = init_scrape_models(api)
-index_models = init_index_models(api)
-query_models = init_query_models(api)
-disease_models = init_disease_models(api)
-report_models = init_report_models(api)
-
-# Combine models with common models
-root_models.update(common_models)
-scan_models.update(common_models)
-scrape_models.update(common_models)
-index_models.update(common_models)
-query_models.update(common_models)
-disease_models.update(common_models)
-report_models.update(common_models)
-
 # Import and register endpoints
 from .endpoints.root import register_root_endpoint
 from .endpoints.beginScan import register_beginScan_endpoint
@@ -78,10 +50,10 @@ from .endpoints.query import register_query_endpoint
 from .endpoints.disease import register_disease_endpoint
 from .endpoints.report import register_report_endpoint
 
-register_root_endpoint(root_ns, root_models)
-register_beginScan_endpoint(scan_ns, scan_models)
-register_scrape_endpoint(scrape_ns, scrape_models)
-register_index_endpoint(index_ns, index_models)
-register_query_endpoint(query_ns, query_models)
-register_disease_endpoint(disease_ns, disease_models)
-register_report_endpoint(report_ns, report_models) 
+register_root_endpoint(root_ns)
+register_beginScan_endpoint(scan_ns)
+register_scrape_endpoint(scrape_ns)
+register_index_endpoint(index_ns)
+register_query_endpoint(query_ns)
+register_disease_endpoint(disease_ns)
+register_report_endpoint(report_ns) 
