@@ -205,12 +205,12 @@ def analyze_disease(index: VectorStoreIndex, disease_name: str, disease_criteria
             logger.error("[scan] Invalid index object provided")
             raise ValueError("Invalid index object provided")
             
-        # Log disease characteristics
+        # Log disease characteristics with correct keys
         logger.info(f"[scan] Processing disease characteristics for {disease_name}:")
         logger.info(f"[scan] - Symptoms: {len(disease_criteria.get('symptoms', []))}")
-        logger.info(f"[scan] - Lab Results: {len(disease_criteria.get('lab_results', []))}")
-        logger.info(f"[scan] - Procedures: {len(disease_criteria.get('procedures', []))}")
-        logger.info(f"[scan] - Risk Factors: {len(disease_criteria.get('risk_factors', []))}")
+        logger.info(f"[scan] - Lab Results: {len(disease_criteria.get('labResults', []))}")
+        logger.info(f"[scan] - Procedures: {len(disease_criteria.get('diagnosticProcedures', []))}")
+        logger.info(f"[scan] - Risk Factors: {len(disease_criteria.get('riskFactors', []))}")
 
         # Generate query from disease criteria
         query = generate_disease_query(disease_name, disease_criteria)
@@ -700,29 +700,28 @@ def process_response(response_text: str, disease_criteria: Dict) -> Dict:
         for category, weight in weights.items():
             score = matches['confidence_scores'][category]
             if score > 0:
-                weighted_scores.append(score * weight)
+                weighted_scores.append(weight * score)
         
-        matches['overall_confidence'] = sum(weighted_scores) / sum(weights[cat] 
-            for cat in ['symptoms', 'lab_results', 'procedures', 'risk_factors']
-            if matches['confidence_scores'][cat] > 0) if weighted_scores else 0.0
-        
-        # Add relevant excerpts with confidence context
-        matches['relevant_excerpts'] = []
-        for category in ['symptoms', 'lab_results', 'procedures', 'risk_factors']:
-            for match in matches[category]:
-                excerpt = f"{match['name']} (Confidence: {match['confidence']:.2%}): {match['excerpt']}"
-                matches['relevant_excerpts'].append(excerpt)
-        
-        logger.info(f"[scan] Processed response with {len(matches['relevant_excerpts'])} matches")
-        logger.info(f"[scan] Overall confidence: {matches['overall_confidence']:.2%}")
-        logger.debug(f"[scan] Match details: {json.dumps(matches, indent=2)}")
+        matches['overall_confidence'] = sum(weighted_scores) / sum(weights.values()) if weighted_scores else 0.0
         
         return matches
         
     except Exception as e:
         logger.error(f"[scan] Error processing response: {str(e)}")
-        logger.error("[scan] Error details:", exc_info=True)
-        raise
+        return {
+            'symptoms': [],
+            'lab_results': [],
+            'procedures': [],
+            'risk_factors': [],
+            'confidence_scores': {
+                'symptoms': 0.0,
+                'lab_results': 0.0,
+                'procedures': 0.0,
+                'risk_factors': 0.0
+            },
+            'overall_confidence': 0.0,
+            'relevant_excerpts': []
+        }
 
 # Export the main function and types
 __all__ = [
