@@ -100,10 +100,18 @@ def create_index(
         )
         Settings.embed_batch_size = VECTOR_STORE_CONFIG["embed_batch_size"]
         
+        # Create index and ensure it's on CPU before saving
         index = VectorStoreIndex.from_documents(
             documents=documents,
             show_progress=VECTOR_STORE_CONFIG["show_progress"]
         )
+        
+        # Move to CPU if needed
+        if hasattr(index, 'to'):
+            index = index.to('cpu')
+        elif hasattr(index, '_device'):
+            index._device = 'cpu'
+            
         logger.info('[create_index] VectorStoreIndex created successfully')
         logger.debug(f"[create_index] VectorStoreIndex details: {index}")
         

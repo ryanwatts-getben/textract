@@ -109,9 +109,14 @@ def load_index(user_id: str, project_id: str) -> Optional[VectorStoreIndex]:
             # Try to download existing index
             s3_client.download_file(AWS_UPLOAD_BUCKET_NAME, index_key, temp_filename)
             
-            # Load the index using pickle
+            # Load the index using pickle with CPU device mapping
             with open(temp_filename, 'rb') as f:
+                # Use map_location to handle CUDA/CPU device mapping
                 index = pickle.load(f)
+                if hasattr(index, 'to'):
+                    index = index.to('cpu')
+                elif hasattr(index, '_device'):
+                    index._device = 'cpu'
             
             logger.info("[scan] Successfully loaded existing index")
             return index
