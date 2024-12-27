@@ -1,0 +1,1003 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                        String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deviceId                  String?
+  lastVisitedAt             DateTime            @default(now())
+  name                      String
+  firmName                  String?
+  email                     String              @unique
+  address                   String?
+  phone                     String?
+  hashedPassword            String?
+  image                     String?
+  emailVerified             DateTime?
+  verifyToken               String?
+  verifyTokenExpiry         DateTime?
+  forgotPasswordToken       String?
+  forgotPasswordTokenExpiry DateTime?
+  filevineClientId          String?
+  filevineClientSecret      String?
+  filevinePAT               String?
+  smartAdvocateBaseUrl      String?
+  smartAdvocateUsername     String?
+  smartAdvocatePassword     String?
+  pdfHeader                 String?
+  firmAddress               String?
+  firmEmail                 String?
+  firmPhone                 String?
+  stripeSession             String?
+  invoiceAmount             Int?
+  isActive                  Boolean             @default(true)
+  joinedAt                  DateTime            @default(now())
+  importedAt                DateTime?
+  roleId                    String?             @db.Uuid
+  firmId                    String?             @db.Uuid
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @default(now()) @updatedAt
+  documentTypes             DocumentType[]
+  documentSet               DocumentSet[]
+  fileVineAuth              FileVineAuth?
+  generatedRecords          GeneratedRecord[]
+  letters                   Letter[]
+  medchrons                 Medchron[]
+  project                   Project[]
+  summaryRecords            SummaryRecord[]
+  superAdminSettings        SuperAdminSettings?
+  firm                      Firm?               @relation(fields: [firmId], references: [id])
+  role                      Role?               @relation("userRoles", fields: [roleId], references: [id])
+  userFiles                 UserFiles[]
+  log                       log[]
+  SubCategory               SubCategory[]
+  MappingRule               MappingRule[]
+  Folder                    Folder[]
+  Category                  Category[]
+  BriefRecord               BriefRecord[]
+  Disease                   Disease[]
+  DiseaseProject            DiseaseProject[]
+  diseaseReports            DiseaseReport[]
+  MassTort                  MassTort[]
+  ScoringModel              ScoringModel[]
+}
+
+model DocumentType {
+  id                     String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                   String
+  description            String?
+  priority               Int?                @default(0)
+  showInUI               Boolean             @default(true)
+  assistant              String              @default("")
+  prompt                 String?
+  isDefault              Boolean             @default(false)
+  userId                 String?             @db.Uuid
+  originalDocumentTypeId String?             @db.Uuid
+  allowedFiles           AllowedExtensions[]
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  useInContext           Boolean             @default(false)
+  isImage                Boolean             @default(false)
+  summaryPrompt          String              @default("")
+  useInSummary           Boolean             @default(false)
+  designerPrompt         String?             @db.Text
+
+  // Relations
+  user                User?                 @relation(fields: [userId], references: [id])
+  mappingRules        MappingRule[]
+  letters             Letter[]              @relation("DocumentTypeToLetters")
+  medchrons           Medchron[]            @relation("DocumentTypeToMedchrons")
+  documents           Document[]            @relation("DocumentToDocumentType")
+  subCategories       SubCategory[]         @relation("DocumentTypeToSubCategories")
+  DocumentSet         DocumentSet[]
+  UserFiles           UserFiles[]
+  GeneratedFileRecord GeneratedFileRecord[]
+  SummaryFileRecord   SummaryFileRecord[]
+
+  @@unique([name, userId, originalDocumentTypeId], name: "name_userId_originalDocumentTypeId")
+  @@index([name, userId, originalDocumentTypeId])
+}
+
+model Letter {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String
+  prompt            String   @default("")
+  description       String?
+  isActive          Boolean  @default(true)
+  isPHIRequired     Boolean  @default(false)
+  isICDRequired     Boolean  @default(false)
+  requiresDocuments Boolean  @default(true)
+  userId            String?  @db.Uuid
+  isDefault         Boolean  @default(false)
+  originalLetterId  String?  @db.Uuid
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  formFields        Json?
+  contextPrompt     String?
+  designerPrompt    String?
+  requiresDesigner  Boolean  @default(false)
+  documentTypeId    String?  @db.Uuid
+  categoryId        String?  @db.Uuid
+
+  // Relations
+  generatedRecords GeneratedRecord[]
+  originalLetter   Letter?           @relation("UserLetters", fields: [originalLetterId], references: [id])
+  userLetters      Letter[]          @relation("UserLetters")
+  user             User?             @relation(fields: [userId], references: [id])
+  documentTypes    DocumentType[]    @relation("DocumentTypeToLetters")
+  category         Category?         @relation("CategoryToLetters", fields: [categoryId], references: [id])
+
+  @@unique([name, userId, originalLetterId])
+  @@index([name, userId, originalLetterId])
+}
+
+model SuperAdminSettings {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  model                 model    @default(OPENAI)
+  maxTokens             Int      @default(1)
+  openAIApiKey          String   @default("")
+  anthropicApiKey       String   @default("")
+  notificationEmailHook String   @default("")
+  claudeModel           String   @default("")
+  timeout               Int?     @default(120)
+  userId                String   @unique @db.Uuid
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id])
+}
+
+model Firm {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String          @unique
+  address1         String
+  address2         String?
+  city             String
+  state            String
+  zip              String
+  phone            String?
+  email            String
+  planId           String?         @db.Uuid
+  generationCount  Int?            @default(0)
+  stripeCustomerId String?
+  stripeSessionId  String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @default(now()) @updatedAt
+  billing          Billing?
+  demandInvoices   DemandInvoice[]
+  plan             Plan?           @relation(fields: [planId], references: [id])
+  invoices         Invoice[]
+  monthlyUsages    MonthlyUsage[]
+  subscriptions    Subscription[]
+  users            User[]
+}
+
+model Role {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String       @unique
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @default(now()) @updatedAt
+  users       User[]       @relation("userRoles")
+  permissions Permission[] @relation("PermissionToRole")
+}
+
+model Permission {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String  @unique
+  description String?
+  roles       Role[]  @relation("PermissionToRole")
+}
+
+model DocumentSet {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type           Set           @default(USER)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @default(now()) @updatedAt
+  userId         String        @db.Uuid
+  projectId      String?       @db.Uuid
+  documentTypeId String?       @db.Uuid
+  status         Status        @default(QUEUED)
+  documents      Document[]
+  documentType   DocumentType? @relation(fields: [documentTypeId], references: [id])
+  Project        Project?      @relation(fields: [projectId], references: [id])
+  user           User          @relation(fields: [userId], references: [id])
+  userFiles      UserFiles[]
+}
+
+model UserFiles {
+  id               String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String
+  documentTypeName String
+  type             String
+  path             String
+  createdAt        DateTime     @default(now())
+  documentSetId    String       @db.Uuid
+  documentTypeId   String       @db.Uuid
+  userId           String       @db.Uuid
+  status           Status       @default(QUEUED)
+  documentType     DocumentType @relation(fields: [documentTypeId], references: [id], onDelete: Cascade)
+  documentSet      DocumentSet  @relation(fields: [documentSetId], references: [id], onDelete: Cascade)
+  user             User         @relation(fields: [userId], references: [id])
+}
+
+model Document {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String?
+  upload_url          String?
+  s3_url              String?
+  local_url           String?
+  documentId          String?               @default("")
+  filename            String?
+  size                Int?
+  folderName          String?
+  source              Source                @default(FILEVINE)
+  uploadDate          String?
+  categoryID          String?
+  categoryName        String?
+  subCategoryID       String?
+  subCategoryName     String?
+  clientId            String?               @db.Uuid
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime?             @updatedAt
+  projectId           String?               @db.Uuid
+  documentSetId       String?               @db.Uuid
+  documentType        DocumentType?         @relation("DocumentToDocumentType", fields: [documentTypeId], references: [id])
+  documentTypeId      String?               @db.Uuid
+  documentSet         DocumentSet?          @relation(fields: [documentSetId], references: [id])
+  Project             Project?              @relation(fields: [projectId], references: [id])
+  documentLocator     DocumentLocator?
+  generatedFileRecord GeneratedFileRecord[]
+  summaryFileRecord   SummaryFileRecord[]
+  categoryId          String?               @db.Uuid
+  category            Category?             @relation("CategoryToDocuments", fields: [categoryId], references: [id])
+  importStatus        ImportStatus          @default(PENDING)
+  mimeType            String?
+  pageCount           Int?
+  errorMessage        String?
+  DiseaseFinding      DiseaseFinding[]
+}
+
+model DocumentLocator {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentIdNative Int
+  contentType      String
+  url              String
+  documentId       String   @unique @db.Uuid
+  Document         Document @relation(fields: [documentId], references: [id])
+}
+
+model BriefRecord {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @db.Uuid
+  projectId    String?  @db.Uuid
+  title        String
+  content      String
+  status       Status   @default(QUEUED)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  sections     Json     @default("[]")
+  systemFiles  Json     @default("[]")
+  systemPrompt String
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Billing {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  firmId     String  @unique @db.Uuid
+  cardNumber String?
+  expiryDate String?
+  cvv        String?
+  street     String?
+  city       String?
+  state      String?
+  zipCode    String?
+  firm       Firm    @relation(fields: [firmId], references: [id])
+}
+
+model Invoice {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  invoiceNumber    String
+  firmId           String   @db.Uuid
+  amount           Int?
+  dateOfIssue      DateTime
+  paymentDueDate   DateTime
+  subscriptionId   String?
+  stripeCustomerId String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  firm             Firm     @relation(fields: [firmId], references: [id])
+}
+
+model Subscription {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  firmId               String    @db.Uuid
+  planId               String    @db.Uuid
+  stripeSubscriptionId String
+  stripeCustomerId     String
+  status               String
+  startDate            DateTime
+  endDate              DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  firm                 Firm      @relation(fields: [firmId], references: [id])
+  plan                 Plan      @relation(fields: [planId], references: [id])
+}
+
+model MonthlyUsage {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  firmId                String   @db.Uuid
+  month                 Int
+  year                  Int
+  demandLettersUsed     Int      @default(0)
+  rolloverDemandLetters Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  firm                  Firm     @relation(fields: [firmId], references: [id])
+}
+
+model Project {
+  id                    String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectIdNative       String?                @default("")
+  projectTypeCode       String?
+  phaseName             String?
+  clientName            String?
+  firstPrimaryName      String?
+  projectEmailAddress   String?
+  incidentDate          DateTime?
+  description           String?
+  lawFirm               String?
+  source                Source                 @default(FILEVINE)
+  importStatus          ImportStatus           @default(PENDING)
+  userId                String?                @db.Uuid
+  demandInvoices        DemandInvoice[]
+  Document              Document[]
+  documentSets          DocumentSet[]
+  generatedRecords      GeneratedRecord[]
+  user                  User?                  @relation(fields: [userId], references: [id])
+  ProjectAdditionalInfo ProjectAdditionalInfo?
+  projectContactList    ProjectContactList[]
+  ProjectNote           ProjectNote[]
+  summaryRecords        SummaryRecord[]
+  BriefRecord           BriefRecord[]
+  TBIReport             TBIReport[]
+  DiseaseProject        DiseaseProject[]
+}
+
+model ProjectContactList {
+  id                 String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId          String       @db.Uuid
+  orgContactIdNative String?
+  projectIdNative    String
+  contactRoleId      String?      @db.Uuid
+  contactName        String?
+  contactEmail       String?
+  contactPhone       String?
+  contactAddress     String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  contactRole        ContactRole? @relation(fields: [contactRoleId], references: [id])
+  project            Project      @relation(fields: [projectId], references: [id])
+}
+
+model FileVineAuth {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String           @unique @db.Uuid
+  apiKey          String?          @default("")
+  apiSecret       String?          @default("")
+  ClientId        String?          @default("")
+  ClientSecret    String?          @default("")
+  PAT             String?          @default("")
+  apiEndpoint     String?          @default("")
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileVineSession FileVineSession? @relation("FileVineAuthToSession")
+}
+
+model FileVineSession {
+  id                 String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  lastLogin          DateTime     @default(now())
+  lastRefresh        DateTime     @default(now())
+  accessToken        String?
+  refreshToken       String?
+  refreshTokenExpiry DateTime?
+  userId             String       @db.Uuid
+  orgId              String
+  authId             String       @unique @db.Uuid
+  auth               FileVineAuth @relation("FileVineAuthToSession", fields: [authId], references: [id], onDelete: Cascade)
+}
+
+model ProjectAdditionalInfo {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId      String   @unique @db.Uuid
+  IncidentDate   String?
+  MedsTotal      String?
+  OtherContext   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  FormFields     Json     @default("[]")
+  vitals         Json     @default("[]")
+  contextFetched Boolean  @default(false)
+  project        Project  @relation(fields: [projectId], references: [id])
+}
+
+model ProjectNote {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId    String?  @db.Uuid
+  content      String
+  noteId       Int      @unique
+  type         String
+  createdAt    DateTime @default(now())
+  lastActivity DateTime @default(now())
+  Project      Project? @relation(fields: [projectId], references: [id])
+}
+
+model GeneratedRecord {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId              String                @db.Uuid
+  projectId           String                @db.Uuid
+  status              Status                @default(QUEUED)
+  url                 String?
+  letterId            String                @db.Uuid
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  fileName            String                @default("")
+  generatedFileRecord GeneratedFileRecord[]
+  letter              Letter                @relation(fields: [letterId], references: [id])
+  project             Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model DemandInvoice {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  invoiceNumber  String   @unique
+  firmId         String   @db.Uuid
+  amount         Float?
+  dateOfIssue    DateTime
+  paymentDueDate DateTime
+  projectId      String?  @db.Uuid
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  firm           Firm     @relation(fields: [firmId], references: [id])
+  Project        Project? @relation(fields: [projectId], references: [id])
+}
+
+model Plan {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  amount          Float
+  title           String         @unique
+  uri             String?
+  stripeId        String
+  meteredStripeId String?
+  limit           Int
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @default(now()) @updatedAt
+  firms           Firm[]
+  subscriptions   Subscription[]
+}
+
+model GeneratedFileRecord {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  generatedRecordId String          @db.Uuid
+  documentId        String          @db.Uuid
+  documentTypeId    String?         @db.Uuid
+  fileName          String
+  status            Status          @default(STARTED)
+  url               String?
+  documentType      DocumentType?   @relation(fields: [documentTypeId], references: [id], onDelete: Cascade)
+  document          Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  generatedRecord   GeneratedRecord @relation(fields: [generatedRecordId], references: [id], onDelete: Cascade)
+}
+
+model SummaryRecord {
+  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String              @db.Uuid
+  projectId         String              @db.Uuid
+  status            Status              @default(QUEUED)
+  url               String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  summary           Json                @default("[]")
+  visits            Json                @default("[]")
+  medchronId        String              @db.Uuid
+  summaryFileRecord SummaryFileRecord[]
+  medchron          Medchron            @relation(fields: [medchronId], references: [id], onDelete: Cascade)
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SummaryFileRecord {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  summaryRecordId String        @db.Uuid
+  documentId      String        @db.Uuid
+  documentTypeId  String        @db.Uuid
+  fileName        String
+  status          Status        @default(STARTED)
+  url             String?
+  summary         Json          @default("[]")
+  visits          Json          @default("[]")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  documentType    DocumentType  @relation(fields: [documentTypeId], references: [id], onDelete: Cascade)
+  document        Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  summaryRecord   SummaryRecord @relation(fields: [summaryRecordId], references: [id], onDelete: Cascade)
+}
+
+model Medchron {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String
+  prompt             String
+  description        String?
+  summaryPrompt      String
+  isActive           Boolean  @default(false)
+  userId             String?  @db.Uuid
+  originalMedchronId String?  @db.Uuid
+  isDefault          Boolean  @default(false)
+  documentTypeId     String?  @db.Uuid
+  categoryId         String?  @db.Uuid
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  originalMedchron Medchron?       @relation("UserMedchrons", fields: [originalMedchronId], references: [id])
+  userMedchrons    Medchron[]      @relation("UserMedchrons")
+  user             User?           @relation(fields: [userId], references: [id])
+  summaryRecords   SummaryRecord[]
+  documentTypes    DocumentType[]  @relation("DocumentTypeToMedchrons")
+  category         Category?       @relation("CategoryToMedchrons", fields: [categoryId], references: [id])
+  TBIReport        TBIReport[]
+}
+
+// Update the Disease model to include the relationships
+model Disease {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  keyId                String?
+  name                 String
+  icd10                String?
+  icd10Object          Json?
+  icd9Code             String?
+  icd9Text             String?
+  consumerName         String?
+  isProcedure          Boolean  @default(false)
+  relatedTerms         String[]
+  relatedNames         String[]
+  infoLinkData         Json?
+  cptCodes             String[]
+  symptoms             Json
+  labResults           Json
+  diagnosticProcedures String[]
+  riskFactors          String[]
+  userId               String?  @db.Uuid
+  isGlobal             Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  isActive             Boolean  @default(true)
+  scoringModelId       String?  @db.Uuid
+  rawData              Json?
+
+  // Add these new relations
+  parentRelations DiseaseRelationship[] @relation("ParentDiseases")
+  childRelations  DiseaseRelationship[] @relation("ChildDiseases")
+
+  // Keep All Existing relations...
+  user                User?                 @relation(fields: [userId], references: [id])
+  scoringModel        ScoringModel?         @relation(fields: [scoringModelId], references: [id])
+  MassTortDisease     MassTortDisease[]
+  DiseaseProject      DiseaseProject[]
+  Symptom             Symptom[]
+  LabResult           LabResult[]
+  DiagnosticProcedure DiagnosticProcedure[]
+  RiskFactor          RiskFactor[]
+
+  @@unique([name, userId])
+}
+
+model MassTort {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  officialName String
+  tortType     String
+  nickname     String?
+  userId       String?  @db.Uuid
+  isGlobal     Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  user             User?             @relation(fields: [userId], references: [id])
+  massTortDiseases MassTortDisease[] // Join table for many-to-many
+  diseaseProjects  DiseaseProject[]
+  diseaseReports   DiseaseReport[]
+
+  @@index([officialName])
+  @@index([nickname])
+  @@index([tortType])
+  @@index([isGlobal])
+  @@index([userId])
+  @@index([isActive])
+}
+
+// Update the MassTortDisease model
+model MassTortDisease {
+  massTortId String   @db.Uuid
+  diseaseId  String   @db.Uuid
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  massTort MassTort @relation(fields: [massTortId], references: [id], onDelete: Cascade)
+  disease  Disease  @relation(fields: [diseaseId], references: [id], onDelete: Cascade)
+
+  @@id([massTortId, diseaseId])
+  @@index([massTortId])
+  @@index([diseaseId])
+  @@index([updatedAt])
+}
+
+model DiseaseProject {
+  id               String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String
+  projectId        String               @db.Uuid
+  diseaseId        String               @db.Uuid
+  massTortId       String               @db.Uuid
+  userId           String               @db.Uuid
+  status           DiseaseProjectStatus @default(PENDING)
+  score            Float?
+  confidence       Float?
+  lawFirm          String?
+  plaintiff        String?
+  isActive         Boolean              @default(true)
+  matchCount       Int                  @default(0)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  scoringModelId   String?              @db.Uuid
+  matchedSymptoms     String[]          @default([])
+  matchedLabResults   String[]          @default([])
+  matchedProcedures   String[]          @default([])
+  matchedRiskFactors  String[]          @default([])
+  relevantExcerpts    String[]          @default([])
+  lastUpdated         DateTime?
+
+  // Relations
+  project      Project          @relation(fields: [projectId], references: [id])
+  disease      Disease          @relation(fields: [diseaseId], references: [id])
+  massTort     MassTort         @relation(fields: [massTortId], references: [id])
+  user         User             @relation(fields: [userId], references: [id])
+  findings     DiseaseFinding[]
+  ScoringModel ScoringModel?    @relation(fields: [scoringModelId], references: [id])
+
+  @@unique([projectId, massTortId, diseaseId])
+  @@index([projectId])
+  @@index([diseaseId])
+  @@index([massTortId])
+  @@index([userId])
+}
+
+model Symptom {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  diseaseId String  @db.Uuid
+  disease   Disease @relation(fields: [diseaseId], references: [id], onDelete: Cascade)
+}
+
+model LabResult {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  range     String
+  diseaseId String  @db.Uuid
+  disease   Disease @relation(fields: [diseaseId], references: [id], onDelete: Cascade)
+}
+
+model DiagnosticProcedure {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  diseaseId String  @db.Uuid
+  disease   Disease @relation(fields: [diseaseId], references: [id], onDelete: Cascade)
+}
+
+model RiskFactor {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  diseaseId String  @db.Uuid
+  disease   Disease @relation(fields: [diseaseId], references: [id], onDelete: Cascade)
+}
+
+model ScoringModel {
+  id                        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                      String?
+  symptomWeight             Float    @default(0.3)
+  labResultWeight           Float    @default(0.3)
+  diagnosticProcedureWeight Float    @default(0.2)
+  riskFactorWeight          Float    @default(0.2)
+  confidenceThreshold       Float    @default(0.7)
+  isGlobal                  Boolean  @default(false)
+  userId                    String?  @db.Uuid
+  isActive                  Boolean  @default(true)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  // Relations
+  user            User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  diseases        Disease[] // One-to-many relation with Disease
+  diseaseProjects DiseaseProject[]
+
+  @@index([userId])
+}
+
+model ContactRole {
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String               @unique
+  shortCode          String?
+  description        String?
+  mappings           String[]
+  ProjectContactList ProjectContactList[]
+}
+
+model log {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  endpoint  String
+  status    String
+  message   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  userId    String?  @db.Uuid
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+enum Status {
+  QUEUED
+  DRAFT
+  STARTED
+  PENDING
+  IN_PROGRESS
+  SENT_TO_GPT
+  READY_FOR_GPT
+  COMPLETED
+  APPROVED
+  REJECTED
+  TIMED_OUT
+  READY_FOR_DESIGNER
+}
+
+enum Source {
+  LOCAL
+  FILEVINE
+  SMART_ADVOCATE
+}
+
+enum AllowedExtensions {
+  pdf
+  jpg
+  png
+  jpeg
+}
+
+enum Set {
+  TRAIN
+  USER
+}
+
+enum model {
+  CLAUDE
+  OPENAI
+}
+
+enum ImportStatus {
+  FETCHED
+  PENDING
+  PROCESSING
+  COMPLETED
+  ERROR
+}
+
+enum PlanStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum FieldType {
+  TEXT
+  NUMBER
+  DATE
+  CHECKBOX
+  RADIO
+  SELECT
+  TEXTAREA
+}
+
+// Model to represent sub-categories, associated with categories
+model SubCategory {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String
+  description           String?
+  priority              Int?     @default(0)
+  showInUI              Boolean  @default(true)
+  isDefault             Boolean  @default(false)
+  userId                String?  @db.Uuid
+  originalSubCategoryId String?  @db.Uuid // References the original subcategory
+  categoryId            String?  @db.Uuid // References the parent category
+  documentTypeId        String?  @db.Uuid // Foreign key to DocumentType
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  // Relations
+  user         User?         @relation(fields: [userId], references: [id])
+  category     Category?     @relation("CategoryToSubCategory", fields: [categoryId], references: [id])
+  documentType DocumentType? @relation("DocumentTypeToSubCategories", fields: [documentTypeId], references: [id])
+  mappingRules MappingRule[] // Relation to MappingRule
+}
+
+// Model to store user-defined mapping rules for document categorization
+model MappingRule {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String   @db.Uuid
+  subCategoryId  String?  @db.Uuid
+  folderId       String?  @db.Uuid
+  categoryId     String?  @db.Uuid
+  documentTypeId String?  @db.Uuid
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id])
+  category     Category?     @relation(fields: [categoryId], references: [id])
+  subCategory  SubCategory?  @relation(fields: [subCategoryId], references: [id])
+  folder       Folder?       @relation(fields: [folderId], references: [id])
+  documentType DocumentType? @relation(fields: [documentTypeId], references: [id])
+}
+
+// Add the Folder model
+model Folder {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  userId    String?  @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User?         @relation(fields: [userId], references: [id])
+  mappingRules MappingRule[] // Relation to MappingRule
+
+  @@unique([name, userId])
+}
+
+// Add the Category model
+model Category {
+  id                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String
+  description        String? // A brief description of the category
+  priority           Int?                @default(0) // Priority for ordering categories
+  showInUI           Boolean             @default(true) // Determines if the category is visible in the UI
+  assistant          String              @default("") // Assistant associated with the category
+  allowedFiles       AllowedExtensions[] // Allowed file types for this category
+  isDefault          Boolean             @default(false) // Indicates if it's a default category
+  useInSummary       Boolean             @default(false) // Determines if the category is used in summaries
+  userId             String?             @db.Uuid // References the user who owns this category
+  originalCategoryId String?             @db.Uuid // References the original category for user-specific overrides
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  // Relations
+  user          User?         @relation(fields: [userId], references: [id])
+  mappingRules  MappingRule[] // Relation to MappingRule
+  letters       Letter[]      @relation("CategoryToLetters")
+  medchrons     Medchron[]    @relation("CategoryToMedchrons")
+  documents     Document[]    @relation("CategoryToDocuments")
+  subCategories SubCategory[] @relation("CategoryToSubCategory")
+
+  @@unique([name, userId])
+}
+
+model DiseaseReport {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String
+  type       String // 'quarterly' | 'custom'
+  format     String // 'pdf' | 'excel'
+  status     String   @default("pending") // 'pending' | 'completed' | 'error'
+  filePath   String?
+  isActive   Boolean  @default(true)
+  userId     String   @db.Uuid
+  massTortId String   @db.Uuid
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  user     User     @relation(fields: [userId], references: [id])
+  massTort MassTort @relation(fields: [massTortId], references: [id])
+
+  @@index([userId])
+  @@index([massTortId])
+}
+
+// TBI Report Template model (managed by super admin)
+model TBIReportTemplate {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  content   String      @db.Text
+  isActive  Boolean     @default(true)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  reports   TBIReport[]
+}
+
+// Individual TBI Reports generated for projects
+model TBIReport {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId  String   @db.Uuid
+  medchronId String?  @db.Uuid
+  templateId String   @db.Uuid
+  content    String   @db.Text
+  status     Status   @default(QUEUED)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  project  Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  medchron Medchron?         @relation(fields: [medchronId], references: [id])
+  template TBIReportTemplate @relation(fields: [templateId], references: [id])
+
+  @@index([projectId])
+  @@index([medchronId])
+}
+
+model DiseaseFinding {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  diseaseProjectId String   @db.Uuid
+  findingType      String // "SYMPTOM", "LAB_RESULT", etc.
+  documentId       String   @db.Uuid
+  value            String
+  confidence       Float
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  diseaseProject DiseaseProject @relation(fields: [diseaseProjectId], references: [id])
+  document       Document       @relation(fields: [documentId], references: [id])
+
+  @@index([diseaseProjectId])
+  @@index([documentId])
+}
+
+// Add this new model
+model DiseaseRelationship {
+  id              String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  parentDiseaseId String              @db.Uuid
+  childDiseaseId  String              @db.Uuid
+  relationType    DiseaseRelationType
+  description     String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  parentDisease Disease @relation("ParentDiseases", fields: [parentDiseaseId], references: [id])
+  childDisease  Disease @relation("ChildDiseases", fields: [childDiseaseId], references: [id])
+
+  @@unique([parentDiseaseId, childDiseaseId, relationType])
+  @@index([parentDiseaseId])
+  @@index([childDiseaseId])
+}
+
+// Add the new enum for relationship types
+enum DiseaseRelationType {
+  HIGHLY_RELATED
+  SYMPTOM_INDICATOR
+  HEREDITARY
+  COMORBIDITY
+  OTHER
+}
+
+enum DiseaseProjectStatus {
+  PENDING
+  COMPLETED
+  ERROR
+}
+
+enum MassTortDiseaseStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  ERROR
+}
