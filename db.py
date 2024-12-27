@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import SQLAlchemyError
 from dotenv import load_dotenv
+from contextlib import contextmanager
 
 # Load environment variables
 load_dotenv()
@@ -25,76 +26,39 @@ if not DATABASE_URL:
 
 # SQLAlchemy engine configuration
 ENGINE_CONFIG = {
-    'pool_size': 5,  # Maximum number of connections to keep in the pool
-    'max_overflow': 10,  # Maximum number of connections that can be created beyond pool_size
-    'pool_timeout': 30,  # Seconds to wait before giving up on getting a connection from the pool
-    'pool_recycle': 1800,  # Recycle connections after 30 minutes
-    'pool_pre_ping': True,  # Enable connection health checks
-    'poolclass': QueuePool  # Use QueuePool for connection pooling
+    'pool_size': 5,
+    'max_overflow': 10,
+    'pool_timeout': 30,
+    'pool_recycle': 1800,
+    'pool_pre_ping': True,
+    'poolclass': QueuePool
 }
 
-class DatabaseConnection:
-    _engine: Optional[Engine] = None
-    _SessionLocal: Optional[sessionmaker] = None
-
-    @classmethod
-    def initialize(cls) -> None:
-        """Initialize the database engine and session factory."""
-        try:
-            if not cls._engine:
-                logger.info("[db] Initializing database engine")
-                cls._engine = create_engine(
-                    DATABASE_URL,
-                    **ENGINE_CONFIG
-                )
-                cls._SessionLocal = sessionmaker(
-                    autocommit=False,
-                    autoflush=False,
-                    bind=cls._engine
-                )
-                logger.info("[db] Database engine initialized successfully")
-        except Exception as e:
-            logger.error(f"[db] Failed to initialize database engine: {str(e)}")
-            raise
-
-    @classmethod
-    def get_engine(cls) -> Engine:
-        """Get the SQLAlchemy engine instance."""
-        if not cls._engine:
-            cls.initialize()
-        return cls._engine
-
-    @classmethod
-    def get_session(cls) -> Session:
-        """Create a new database session."""
-        if not cls._SessionLocal:
-            cls.initialize()
-        return cls._SessionLocal()
-
-def get_db() -> Session:
-    """
-    Get a database session with automatic cleanup.
-    Use this as a context manager or in a try-finally block.
-    
-    Example:
-        with get_db() as db:
-            result = db.query(Model).all()
-    """
-    db = DatabaseConnection.get_session()
-    try:
-        yield db
-    finally:
-        try:
-            db.close()
-        except SQLAlchemyError as e:
-            logger.error(f"[db] Error closing database session: {str(e)}")
-
-# Initialize the database connection on module import
+# Create engine and session factory
 try:
-    DatabaseConnection.initialize()
+    engine = create_engine(DATABASE_URL, **ENGINE_CONFIG)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    logger.info("[db] Database engine initialized successfully")
 except Exception as e:
-    logger.error(f"[db] Failed to initialize database connection: {str(e)}")
+    logger.error(f"[db] Failed to initialize database engine: {str(e)}")
     raise
 
+@contextmanager
+def get_session() -> Session:
+    """
+    Context manager for database sessions.
+    Ensures proper handling of sessions including error cases.
+    """
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"[db] Database session error: {str(e)}")
+        raise
+    finally:
+        session.close()
+
 # Export commonly used objects
-__all__ = ['DatabaseConnection', 'get_db']
+__all__ = ['get_session']
