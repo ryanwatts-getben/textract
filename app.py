@@ -7,16 +7,16 @@ import tempfile
 import pickle
 import re
 import io
-import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Tuple, Dict, Any
-from pathlib import Path
+from typing import  Optional, Tuple, Dict, Any
 import shutil
 from pypdf import PdfReader
 # import docx  # Changed from docx.document import Document
 import csv
 import torch
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
 
 # Third-party imports
 from flask import Flask, request, jsonify, redirect
@@ -37,9 +37,11 @@ from llama_index.core import (
 from llama_index.llms.anthropic import Anthropic
 
 # Local imports
+import db
 from docs.swagger_config import api, scrape_ns, scan_ns
 from docs.models.scan_models import init_scan_models
 from docs.models.scrape_models import init_scrape_models
+from examplequery import get_mass_tort_data, get_disease_project_by_status, update_disease_project_status , get_mass_torts_by_user_id, get_disease_project, create_disease_project
 from rag import create_index, preprocess_document
 from ragindex import process_user_projects
 from disease_definition_generator import generate_multiple_definitions, get_embedding_model
@@ -198,90 +200,90 @@ def query_index(index: VectorStoreIndex, query_text: str) -> str:
         logger.error(f"[app] Error querying index: {str(e)}")
         raise
 
-def extract_text_from_file(content: bytes, file_extension: str) -> str:
-    """
-    Extract text from various file types.
+# def extract_text_from_file(content: bytes, file_extension: str) -> str:
+#     """
+#     Extract text from various file types.
     
-    Args:
-        content (bytes): The binary content of the file
-        file_extension (str): The file extension (including the dot)
+#     Args:
+#         content (bytes): The binary content of the file
+#         file_extension (str): The file extension (including the dot)
         
-    Returns:
-        str: The extracted text
-    """
-    try:
-        if file_extension == '.txt':
-            return content.decode('utf-8', errors='ignore')
+#     Returns:
+#         str: The extracted text
+#     """
+#     try:
+#         if file_extension == '.txt':
+#             return content.decode('utf-8', errors='ignore')
             
-        elif file_extension == '.pdf':
-            with io.BytesIO(content) as pdf_buffer:
-                reader = PdfReader(pdf_buffer)
-                text = []
-                for page in reader.pages:
-                    text.append(page.extract_text() or '')
-                return '\n'.join(text)
+#         elif file_extension == '.pdf':
+#             with io.BytesIO(content) as pdf_buffer:
+#                 reader = PdfReader(pdf_buffer)
+#                 text = []
+#                 for page in reader.pages:
+#                     text.append(page.extract_text() or '')
+#                 return '\n'.join(text)
                 
-        elif file_extension == '.docx':
-            with io.BytesIO(content) as docx_buffer:
-                doc = Document(docx_buffer)
-                return '\n'.join(paragraph.text for paragraph in doc.paragraphs)
+#         elif file_extension == '.docx':
+#             with io.BytesIO(content) as docx_buffer:
+#                 doc = Document(docx_buffer)
+#                 return '\n'.join(paragraph.text for paragraph in doc.paragraphs)
                 
-        elif file_extension == '.csv':
-            text_data = content.decode('utf-8', errors='ignore')
-            csv_reader = csv.reader(text_data.splitlines())
-            return '\n'.join(','.join(row) for row in csv_reader)
+#         elif file_extension == '.csv':
+#             text_data = content.decode('utf-8', errors='ignore')
+#             csv_reader = csv.reader(text_data.splitlines())
+#             return '\n'.join(','.join(row) for row in csv_reader)
             
-        elif file_extension in {'.xml', '.xsd'}:
-            try:
-                root = DefusedET.fromstring(content.decode('utf-8', errors='ignore'))
-                text_content = []
+#         elif file_extension in {'.xml', '.xsd'}:
+#             try:
+#                 root = DefusedET.fromstring(content.decode('utf-8', errors='ignore'))
+#                 text_content = []
                 
-                def extract_text_from_element(element, path=""):
-                    current_path = f"{path}/{element.tag}" if path else element.tag
+#                 def extract_text_from_element(element, path=""):
+#                     current_path = f"{path}/{element.tag}" if path else element.tag
                     
-                    # Add element text if present
-                    if element.text and element.text.strip():
-                        text_content.append(f"{current_path}: {element.text.strip()}")
+#                     # Add element text if present
+#                     if element.text and element.text.strip():
+#                         text_content.append(f"{current_path}: {element.text.strip()}")
                     
-                    # Process attributes
-                    for key, value in element.attrib.items():
-                        text_content.append(f"{current_path}[@{key}]: {value}")
+#                     # Process attributes
+#                     for key, value in element.attrib.items():
+#                         text_content.append(f"{current_path}[@{key}]: {value}")
                     
-                    # Process child elements
-                    for child in element:
-                        extract_text_from_element(child, current_path)
+#                     # Process child elements
+#                     for child in element:
+#                         extract_text_from_element(child, current_path)
                 
-                extract_text_from_element(root)
-                return '\n'.join(text_content)
+#                 extract_text_from_element(root)
+#                 return '\n'.join(text_content)
                 
-            except Exception as xml_e:
-                logger.error(f"[app] Error parsing XML/XSD content: {str(xml_e)}")
-                return content.decode('utf-8', errors='ignore')
+#             except Exception as xml_e:
+#                 logger.error(f"[app] Error parsing XML/XSD content: {str(xml_e)}")
+#                 return content.decode('utf-8', errors='ignore')
                 
-        elif file_extension == '.rrf':
-            # RRF (Rich Release Format) files are typically pipe-delimited
-            text_data = content.decode('utf-8', errors='ignore')
-            return '\n'.join(line for line in text_data.splitlines())
+#         elif file_extension == '.rrf':
+#             # RRF (Rich Release Format) files are typically pipe-delimited
+#             text_data = content.decode('utf-8', errors='ignore')
+#             return '\n'.join(line for line in text_data.splitlines())
             
-        elif file_extension == '.json':
-            try:
-                json_data = json.loads(content.decode('utf-8', errors='ignore'))
-                if isinstance(json_data, dict):
-                    return '\n'.join(f"{k}: {v}" for k, v in json_data.items())
-                elif isinstance(json_data, list):
-                    return '\n'.join(str(item) for item in json_data)
-                else:
-                    return str(json_data)
-            except json.JSONDecodeError:
-                return content.decode('utf-8', errors='ignore')
+#         elif file_extension == '.json':
+#             try:
+#                 json_data = json.loads(content.decode('utf-8', errors='ignore'))
+#                 if isinstance(json_data, dict):
+#                     return '\n'.join(f"{k}: {v}" for k, v in json_data.items())
+#                 elif isinstance(json_data, list):
+#                     return '\n'.join(str(item) for item in json_data)
+#                 else:
+#                     return str(json_data)
+#             except json.JSONDecodeError:
+#                 return content.decode('utf-8', errors='ignore')
         
-        else:
-            logger.warning(f"[app] Unsupported file extension: {file_extension}")
-            return content.decode('utf-8', errors='ignore')
+#         else:
+#             logger.warning(f"[app] Unsupported file extension: {file_extension}")
+#             return content.decode('utf-8', errors='ignore')
             
-    except Exception as e:
-        logger.error(f"[app] Error extracting text from {file_extension} file: {str(e)}")
-        return ""
+#     except Exception as e:
+#         logger.error(f"[app] Error extracting text from {file_extension} file: {str(e)}")
+#         return ""
 
 def process_single_document(s3_client, key: str) -> Optional[Document]:
     """Process a single document from S3."""
@@ -472,10 +474,6 @@ def create_or_update_index(user_id: str = DEFAULT_USER_ID, project_id: str = DEF
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
             logger.info(f"[app] Cleaned up temporary directory: {temp_dir}")
-
-def preprocess_document(document_text: str) -> str:
-    """Preprocess a single document's text."""
-    return document_text.lower()
 
 class ProgressPercentage:
     def __init__(self, filename):
@@ -684,58 +682,58 @@ def clean_text(text):
     
     return text if text.strip() else None
 
-def read_file_content(file_path):
-    """Reads and validates file content."""
-    try:
-        file_lower = file_path.lower()
+# def read_file_content(file_path):
+#     """Reads and validates file content."""
+#     try:
+#         file_lower = file_path.lower()
         
-        if file_lower.endswith('.pdf'):
-            logger.info(f'[app] Reading PDF file: {file_path}')
-            text = read_pdf_with_fallbacks(file_path)
+#         if file_lower.endswith('.pdf'):
+#             logger.info(f'[app] Reading PDF file: {file_path}')
+#             text = read_pdf_with_fallbacks(file_path)
             
-        elif file_lower.endswith('.json'):
-            logger.info(f'[app] Reading JSON file: {file_path}')
-            with open(file_path, 'r', encoding='utf-8') as file:
-                data = json.load(file)
-                text = process_json_content(data)
+#         elif file_lower.endswith('.json'):
+#             logger.info(f'[app] Reading JSON file: {file_path}')
+#             with open(file_path, 'r', encoding='utf-8') as file:
+#                 data = json.load(file)
+#                 text = process_json_content(data)
                 
-        elif file_lower.endswith('.xml'):
-            logger.info(f'[app] Reading XML file: {file_path}')
-            with open(file_path, 'r', encoding='utf-8') as file:
-                xml_content = file.read()
-            xsd_content = None
-            # Check for corresponding XSD file
-            xsd_file_path = os.path.splitext(file_path)[0] + '.xsd'
-            if os.path.exists(xsd_file_path):
-                logger.info(f'[app] Found XSD schema: {xsd_file_path}')
-                with open(xsd_file_path, 'r', encoding='utf-8') as xsd_file:
-                    xsd_content = xsd_file.read()
-            text = parse_xml_content(xml_content, xsd_content)
+#         elif file_lower.endswith('.xml'):
+#             logger.info(f'[app] Reading XML file: {file_path}')
+#             with open(file_path, 'r', encoding='utf-8') as file:
+#                 xml_content = file.read()
+#             xsd_content = None
+#             # Check for corresponding XSD file
+#             xsd_file_path = os.path.splitext(file_path)[0] + '.xsd'
+#             if os.path.exists(xsd_file_path):
+#                 logger.info(f'[app] Found XSD schema: {xsd_file_path}')
+#                 with open(xsd_file_path, 'r', encoding='utf-8') as xsd_file:
+#                     xsd_content = xsd_file.read()
+#             text = parse_xml_content(xml_content, xsd_content)
             
-        elif file_lower.endswith('.xsd'):
-            logger.info(f'[app] Reading XSD file: {file_path} (treating as XML)')
-            with open(file_path, 'r', encoding='utf-8') as file:
-                xml_content = file.read()
-            text = parse_xml_content(xml_content)
+#         elif file_lower.endswith('.xsd'):
+#             logger.info(f'[app] Reading XSD file: {file_path} (treating as XML)')
+#             with open(file_path, 'r', encoding='utf-8') as file:
+#                 xml_content = file.read()
+#             text = parse_xml_content(xml_content)
             
-        else:  # Text files
-            logger.info(f'[app] Reading text file: {file_path}')
-            with open(file_path, 'r', encoding='utf-8') as file:
-                text = file.read()
+#         else:  # Text files
+#             logger.info(f'[app] Reading text file: {file_path}')
+#             with open(file_path, 'r', encoding='utf-8') as file:
+#                 text = file.read()
 
-        # Validate and clean the text
-        text = clean_text(text)
+#         # Validate and clean the text
+#         text = clean_text(text)
         
-        if not text:
-            logger.warning(f'[app] No valid content extracted from {file_path}')
-            return None
+#         if not text:
+#             logger.warning(f'[app] No valid content extracted from {file_path}')
+#             return None
             
-        logger.info(f'[app] Successfully extracted {len(text)} characters from {file_path}')
-        return text
+#         logger.info(f'[app] Successfully extracted {len(text)} characters from {file_path}')
+#         return text
         
-    except Exception as e:
-        logger.error(f"[app] Error reading file {file_path}: {e}")
-        return None
+#     except Exception as e:
+#         logger.error(f"[app] Error reading file {file_path}: {e}")
+#         return None
 
 def sanitize_filename(filename):
     """
@@ -909,19 +907,6 @@ def extract_text_from_csv(content: bytes) -> str:
         logger.error(f"[app] Error extracting text from CSV: {str(e)}")
         return ""
 
-def process_json_content(data: Any) -> str:
-    """Process JSON data and convert it to text."""
-    try:
-        if isinstance(data, dict):
-            return '\n'.join(f"{k}: {v}" for k, v in data.items() if v is not None)
-        elif isinstance(data, list):
-            return '\n'.join(str(item) for item in data if item is not None)
-        else:
-            return str(data)
-    except Exception as e:
-        logger.error(f"[app] Error processing JSON content: {str(e)}")
-        return ""
-
 @app.route('/scrape/', methods=['POST'])
 def scrape_disease_info():
     """
@@ -1015,14 +1000,52 @@ def scrape_disease_info():
             'error': f'Internal server error: {str(e)}'
         }), 500
 
-@app.route('/beginScan', methods=['POST'])
+@app.route('/beginScan', methods=['GET'])
 def begin_scan():
     """
     Endpoint to begin scanning documents for mass tort analysis.
     """
     try:
         logger.info("[app] Received scan request")
-        data = request.get_json()
+        # data = request.get_json()
+
+        processing_disease_project = get_disease_project_by_status('PROCESSING')
+        if processing_disease_project:
+            logger.info("[app] Found processing project {processing_disease_project['id']}")
+            return jsonify({
+                'status': 'success',
+                'message': 'found existing record in PROCESSING state'
+            }), 200
+        
+        
+
+        disease_project = get_disease_project_by_status()
+
+        if not disease_project:
+            logger.info("[app] No pending projects found")
+            return jsonify({
+                'status': 'success',
+                'message': 'No pending projects found'
+            }), 200
+        
+        logger.info("[app] Found pending project %s", disease_project['userId'])
+
+        mass_tort_data = get_mass_torts_by_user_id(user_id=disease_project['userId'])
+
+        if not mass_tort_data:
+            logger.error("[app] No mass torts found for user {disease_project['userId']}")
+            return jsonify({
+                'status': 'error',
+                'message': 'No mass torts found for user'
+            }), 400
+
+        logger.info(f"[app] Found {len(mass_tort_data)} mass torts for user {disease_project['userId']}")
+        data = get_mass_tort_data(
+            user_id=disease_project['userId'],
+            project_id=disease_project['projectId'],
+            mass_tort_ids=[disease_project['massTortId']]
+        )
+
         if not data:
             logger.error("[app] No JSON data provided")
             return jsonify({
@@ -1049,13 +1072,16 @@ def begin_scan():
             
             if result.get('status') == 'error':
                 logger.error(f"[app] Scan failed: {result.get('message')}")
+                update_disease_project_errorstatus(data)
                 return jsonify(result), 500
                 
             logger.info("[app] Scan completed successfully")
+            process_scanned_results(result, mass_tort_data, project_id=data['projectId'], user_id=disease_project['userId'])
             return jsonify(result), 200
             
         except Exception as scan_error:
             error_msg = f"Error during document scan: {str(scan_error)}"
+            update_disease_project_errorstatus(data)
             logger.error(f"[app] {error_msg}")
             return jsonify({
                 'status': 'error',
@@ -1064,6 +1090,7 @@ def begin_scan():
 
     except Exception as e:
         error_msg = f"Error processing scan request: {str(e)}"
+        update_disease_project_errorstatus(data)
         logger.error(f"[app] {error_msg}")
         return jsonify({
             'status': 'error',
@@ -1115,6 +1142,130 @@ def generate_report():
             'status': 'error',
             'message': str(e)
         }), 500
+    
+def update_disease_project_errorstatus(data):
+    # Extract the required fields from data
+    user_id = data.get('userId')
+    project_id = data.get('projectId')
+    mass_tort_id = data['massTorts'][0]['id'] if data.get('massTorts') else None
+
+    if all([user_id, project_id, mass_tort_id]) and data.get('massTorts'):
+        # Iterate over each disease in the mass torts
+        for disease in data['massTorts'][0]['diseases']:
+            disease_id = disease['id']
+            # Call the update function with the correct disease_id
+            update_disease_project_status(
+                project_id=project_id,
+                mass_tort_id=mass_tort_id,
+                disease_id=disease_id,
+                status='ERROR'
+            )
+            logger.info(
+                "[app] Updated disease project status to ERROR for project %s, disease %s, mass tort %s",
+                project_id, disease_id, mass_tort_id
+            )
+        logger.info(
+            "[app] Updated disease project statuses to ERROR for project %s, mass tort %s",
+            project_id, mass_tort_id
+        )
+    else:
+        logger.error(
+            "[app] Could not update disease project status: missing required fields or diseases"
+        )
+
+def process_scanned_results(data, mass_tort_data, project_id, user_id):
+    """
+    Process scanned results and update disease projects accordingly.
+
+    Args:
+        data (dict): The scanned results data.
+        mass_tort_data (list): List of mass tort data.
+        project_id (str): The project ID.
+        user_id (str): The user ID.
+
+    Returns:
+        None
+    """
+    logger.info("[app] Processing scanned results: %s", json.dumps(mass_tort_data, indent=2))
+    
+    try:
+        if data.get('status') == 'success' and data.get('results'):
+            # Process each mass tort result
+            for mass_tort_result in data['results']:
+                try:
+                    # Find the matching mass tort by official name
+                    mass_tort = next(
+                        (mt for mt in mass_tort_data if mt['officialName'] == mass_tort_result['mass_tort_name']),
+                        None
+                    )
+                    if not mass_tort:
+                        print('[scan.route] Mass tort not found:', mass_tort_result['mass_tort_name'])
+                        continue
+                    
+                    # Process each disease result
+                    for disease_result in mass_tort_result['diseases']:
+                        try:
+                            # Find the matching disease by name
+                            mass_tort_disease = next(
+                                (d for d in mass_tort['massTortDiseases'] if d['disease']['name'] == disease_result['disease_name']),
+                                None
+                            )
+                            if not mass_tort_disease:
+                                print('[scan.route] Disease not found:', disease_result['disease_name'])
+                                continue
+
+                            # Check for existing project
+                            existing_project = get_disease_project(
+                                project_id=project_id,
+                                mass_tort_id=mass_tort['id'],
+                                disease_id=mass_tort_disease['disease']['id']
+                            )
+
+                            if existing_project:
+                                # Update existing project
+                                update_disease_project_status(
+                                    project_id=project_id,
+                                    mass_tort_id=mass_tort['id'],
+                                    disease_id=mass_tort_disease['disease']['id'],
+                                    status='COMPLETED'
+                                )
+                                logger.info(
+                                    "[app] Updated disease project: %s",
+                                    existing_project['id']
+                                )
+                            else:
+                                # Create new project
+                                new_project = create_disease_project(
+                                    name=mass_tort_disease['disease']['name'],
+                                    project_id=project_id,
+                                    disease_id=mass_tort_disease['disease']['id'],
+                                    mass_tort_id=mass_tort['id'],
+                                    user_id=user_id,
+                                    status='COMPLETED',
+                                    confidence=0.9,
+                                    match_count=0,
+                                )
+                                logger.info(
+                                    "[app] Created new disease project: %s",
+                                    new_project['id']
+                                )
+                        except Exception as e:
+                            logger.error(
+                                "[app] Error processing disease '%s' for mass tort '%s': %s",
+                                disease_result.get('disease_name', 'Unknown'), mass_tort_result['mass_tort_name'], str(e)
+                            )
+                except Exception as e:
+                    logger.error(
+                        "[app] Error processing mass tort '%s': %s",
+                        mass_tort_result.get('mass_tort_name', 'Unknown'), str(e)
+                    )
+            logger.info("[app] Scanned results processed successfully")
+        else:
+            logger.error("[app] Error processing scanned results: %s", data.get('message'))
+    
+    except Exception as e:
+        logger.error("[app] Exception in process_scanned_results: %s", str(e))
+        raise
 
 if __name__ == '__main__':
     # Initialize multiprocessing support
