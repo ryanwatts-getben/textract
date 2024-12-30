@@ -196,6 +196,65 @@ def get_disease_project_by_status(status: str = 'PENDING') -> Dict:
         )
         raise
 
+def get_all_disease_project_by_status(status: str = 'PENDING') -> Dict:
+    """
+    Fetch disease projects with PENDING status.
+    
+    Args:
+        user_id (str): The user's ID
+        project_id (str): The project's ID
+    
+    Returns:
+        Dict: The formatted response containing pending disease projects
+    """
+    try:
+        with get_session() as db:
+            # Build the SQL query
+            query = text("""
+                SELECT 
+                    dp.id as disease_project_id,
+                    dp."status" as project_status,
+                    dp."userId" as user_id,
+                    dp."createdAt" as created_at,
+                    dp."projectId" as project_id,
+                    dp."massTortId" as mass_tort_id
+                FROM "DiseaseProject" dp
+                WHERE dp.status = :status
+                ORDER BY dp."createdAt" ASC
+            """)
+            
+            # Execute the query with parameters
+            db_result = db.execute(query, {
+                'status': status,
+            })
+
+            row = db_result.fetchone()
+            
+            if row:
+                disease_project = {
+                    'id': str(row.disease_project_id),
+                    'status': row.project_status,
+                    'projectId': str(row.project_id),
+                    'massTortId': str(row.mass_tort_id),
+                    'userId': str(row.user_id)
+                }
+
+                logger.info(
+                    "[get_first_pending_disease_project] Found %s disease project %s",
+                    status, disease_project['id']
+                )
+                return disease_project
+
+            logger.info(f"[get_first_pending_disease_project] No {status} disease projects found")
+            return None
+
+    except Exception as e:
+        logger.error(
+            "[get_pending_disease_projects] Error fetching pending disease projects: %s",
+            str(e)
+        )
+        raise
+
 def update_disease_project_status(
     project_id: str,
     mass_tort_id: str,
@@ -232,6 +291,46 @@ def update_disease_project_status(
             logger.info(
                 "[examplequery] Updated DiseaseProject status to %s for project %s, disease %s, mass tort %s",
                 status, project_id, disease_id, mass_tort_id
+            )
+    except Exception as e:
+        logger.error(
+            "[examplequery] Error updating DiseaseProject status to %s: %s",
+            status, str(e)
+        )
+        raise
+
+def update_disease_project_status_by_user(
+    project_id: str,
+    user_id: str,
+    status: str
+) -> None:
+    """
+    Update the DiseaseProject table to set the status to the provided status value and updatedAt to now
+    where the given projectId and userId are found.
+
+    Args:
+        project_id (str): The project's ID
+        user_id (str): The user's ID
+        status (str): The status to set (e.g., 'ERROR', 'PROCESSING', etc.)
+    """
+    try:
+        with get_session() as db:
+            # Build the SQL update query
+            update_query = text("""
+                UPDATE "DiseaseProject"
+                SET status = :status, "updatedAt" = NOW()
+                WHERE "projectId"::text = :project_id
+                AND "userId"::text = :user_id
+            """)
+            # Execute the update query with parameters
+            db.execute(update_query, {
+                'project_id': project_id,
+                'user_id': user_id,
+                'status': status
+            })
+            logger.info(
+                "[examplequery] Updated DiseaseProject status to %s for project %s, user %s",
+                status, project_id, user_id
             )
     except Exception as e:
         logger.error(
