@@ -973,36 +973,47 @@ def scrape_disease_info():
 def begin_scan():
     """
     Endpoint to begin scanning documents for mass tort analysis.
+    Only processes projects that have been marked as READY by /prepareScan.
     """
     try:
         logger.info("[app] Received scan request")
-        # data = request.get_json()
 
+        # Check for already processing projects
         processing_disease_project = get_disease_project_by_status('PROCESSING')
         if processing_disease_project:
-            logger.info("[app] Found processing project {processing_disease_project['id']}")
+            logger.info(f"[app] Found processing project {processing_disease_project['id']}")
             return jsonify({
                 'status': 'success',
                 'message': 'found existing record in PROCESSING state'
             }), 200
 
-        disease_projects = get_all_disease_project_by_status()
-
-            
-        disease_project = check_if_index_or_input_exists(disease_projects)
+        # Get the first READY project
+        disease_project = get_disease_project_by_status('READY')
         if not disease_project:
-            logger.info("[app] No pending projects found")
+            logger.info("[app] No READY projects found")
             return jsonify({
                 'status': 'success',
-                'message': 'No pending projects found'
+                'message': 'No READY projects found'
             }), 200
         
-        logger.info("[app] Found pending project %s", disease_project['userId'])
+        logger.info(f"[app] Found READY project {disease_project['userId']}")
 
+        # Update status to PROCESSING
+        update_disease_project_status_by_user(
+            project_id=disease_project['projectId'],
+            user_id=disease_project['userId'],
+            status='PROCESSING'
+        )
+
+        # Get mass tort data
         mass_tort_data = get_mass_torts_by_user_id(user_id=disease_project['userId'])
-
         if not mass_tort_data:
-            logger.error("[app] No mass torts found for user {disease_project['userId']}")
+            logger.error(f"[app] No mass torts found for user {disease_project['userId']}")
+            update_disease_project_status_by_user(
+                project_id=disease_project['projectId'],
+                user_id=disease_project['userId'],
+                status='ERROR'
+            )
             return jsonify({
                 'status': 'error',
                 'message': 'No mass torts found for user'
@@ -1018,6 +1029,11 @@ def begin_scan():
 
         if not data:
             logger.error("[app] No JSON data provided")
+            update_disease_project_status_by_user(
+                project_id=disease_project['projectId'],
+                user_id=disease_project['userId'],
+                status='ERROR'
+            )
             return jsonify({
                 'status': 'error',
                 'message': 'No JSON data provided'
@@ -1028,6 +1044,11 @@ def begin_scan():
         missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
             logger.error(f"[app] Missing required fields: {missing_fields}")
+            update_disease_project_status_by_user(
+                project_id=disease_project['projectId'],
+                user_id=disease_project['userId'],
+                status='ERROR'
+            )
             return jsonify({
                 'status': 'error',
                 'message': f'Missing required fields: {", ".join(missing_fields)}'
@@ -1042,7 +1063,11 @@ def begin_scan():
             
             if result.get('status') == 'error':
                 logger.error(f"[app] Scan failed: {result.get('message')}")
-                update_disease_project_errorstatus(data)
+                update_disease_project_status_by_user(
+                    project_id=disease_project['projectId'],
+                    user_id=disease_project['userId'],
+                    status='ERROR'
+                )
                 return jsonify(result), 500
                 
             logger.info("[app] Scan completed successfully")
@@ -1051,7 +1076,11 @@ def begin_scan():
             
         except Exception as scan_error:
             error_msg = f"Error during document scan: {str(scan_error)}"
-            update_disease_project_errorstatus(data)
+            update_disease_project_status_by_user(
+                project_id=disease_project['projectId'],
+                user_id=disease_project['userId'],
+                status='ERROR'
+            )
             logger.error(f"[app] {error_msg}")
             return jsonify({
                 'status': 'error',
@@ -1060,7 +1089,6 @@ def begin_scan():
 
     except Exception as e:
         error_msg = f"Error processing scan request: {str(e)}"
-        update_disease_project_errorstatus(data)
         logger.error(f"[app] {error_msg}")
         return jsonify({
             'status': 'error',
@@ -1267,6 +1295,162 @@ def process_scanned_results(data, mass_tort_data, project_id, user_id):
     except Exception as e:
         logger.error("[app] Exception in process_scanned_results: %s", str(e))
         raise
+
+def check_files_for_project(project: Dict) -> Tuple[Dict, bool]:
+    """
+    Check if index.pkl or input folder exists for a single project.
+    
+    Args:
+        project: Dictionary containing project information
+        
+    Returns:
+        Tuple[Dict, bool]: Project dict and boolean indicating if files exist
+    """
+    user_id = project.get('userId')
+    project_id = project.get('projectId')
+
+    if not user_id or not project_id:
+        logger.error(f"[app] Missing required userId or projectId for project: {project}")
+        return project, False
+
+    try:
+        # Initialize S3 client
+        s3_client = boto3.client('s3')
+        
+        # Check for index.pkl
+        index_key = f"{user_id}/{project_id}/index.pkl"
+        has_index = False
+        try:
+            s3_client.head_object(Bucket=AWS_UPLOAD_BUCKET_NAME, Key=index_key)
+            has_index = True
+            logger.info(f"[app] Found index.pkl at s3://{AWS_UPLOAD_BUCKET_NAME}/{index_key}")
+        except ClientError:
+            logger.info(f"[app] No index.pkl found at s3://{AWS_UPLOAD_BUCKET_NAME}/{index_key}")
+        
+        # Check for input folder
+        input_prefix = f"{user_id}/{project_id}/input/"
+        has_input = False
+        try:
+            response = s3_client.list_objects_v2(
+                Bucket=AWS_UPLOAD_BUCKET_NAME,
+                Prefix=input_prefix,
+                MaxKeys=1
+            )
+            has_input = response.get('KeyCount', 0) > 0
+            if has_input:
+                logger.info(f"[app] Found input folder at s3://{AWS_UPLOAD_BUCKET_NAME}/{input_prefix}")
+            else:
+                logger.info(f"[app] Empty or no input folder at s3://{AWS_UPLOAD_BUCKET_NAME}/{input_prefix}")
+        except ClientError as e:
+            logger.error(f"[app] Error checking input folder: {str(e)}")
+        
+        return project, (has_index or has_input)
+        
+    except Exception as e:
+        logger.error(f"[app] Error checking files for project {project_id}: {str(e)}")
+        return project, False
+
+def prepare_projects_for_scan(disease_projects: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
+    """
+    Check all projects concurrently and separate them into valid and invalid projects.
+    
+    Args:
+        disease_projects: List of disease project dictionaries
+        
+    Returns:
+        Tuple[List[Dict], List[Dict]]: Lists of valid and invalid projects
+    """
+    if not disease_projects:
+        return [], []
+    
+    MAX_WORKERS = 5
+    valid_projects = []
+    invalid_projects = []
+    
+    try:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Submit all projects for checking
+            future_to_project = {
+                executor.submit(check_files_for_project, project): project 
+                for project in disease_projects
+            }
+            
+            # Process results as they complete
+            for future in as_completed(future_to_project):
+                project = future_to_project[future]
+                try:
+                    project, files_exist = future.result()
+                    
+                    if files_exist:
+                        valid_projects.append(project)
+                    else:
+                        invalid_projects.append(project)
+                        
+                except Exception as e:
+                    logger.error(f"[app] Error processing project {project.get('projectId')}: {str(e)}")
+                    invalid_projects.append(project)
+        
+        return valid_projects, invalid_projects
+        
+    except Exception as e:
+        logger.error(f"[app] Error in concurrent project checking: {str(e)}")
+        return [], disease_projects
+
+@app.route('/prepareScan', methods=['GET'])
+def prepare_scan():
+    """
+    Endpoint to check all pending projects and prepare them for scanning.
+    Only performs the file existence check and updates project statuses.
+    """
+    try:
+        logger.info("[app] Received prepare scan request")
+
+        # Get all disease projects
+        disease_projects = get_all_disease_project_by_status()
+        if not disease_projects:
+            logger.info("[app] No disease projects found")
+            return jsonify({
+                'status': 'success',
+                'message': 'No disease projects found',
+                'validProjects': [],
+                'invalidProjects': []
+            }), 200
+
+        # Check all projects concurrently
+        valid_projects, invalid_projects = prepare_projects_for_scan(disease_projects)
+        
+        # Update statuses for all projects
+        for project in valid_projects:
+            update_disease_project_status_by_user(
+                project_id=project['projectId'],
+                user_id=project['userId'],
+                status='READY'  # New status to indicate project is ready for scanning
+            )
+            
+        for project in invalid_projects:
+            update_disease_project_status_by_user(
+                project_id=project['projectId'],
+                user_id=project['userId'],
+                status='ERROR'
+            )
+        
+        # Return results
+        return jsonify({
+            'status': 'success',
+            'message': f'Found {len(valid_projects)} valid and {len(invalid_projects)} invalid projects',
+            'validProjects': valid_projects,
+            'invalidProjects': invalid_projects
+        }), 200
+        
+    except Exception as e:
+        error_msg = f"Error preparing scan: {str(e)}"
+        logger.error(f"[app] {error_msg}")
+        return jsonify({
+            'status': 'error',
+            'message': error_msg,
+            'validProjects': [],
+            'invalidProjects': []
+        }), 500
 
 if __name__ == '__main__':
     # Initialize multiprocessing support
