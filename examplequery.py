@@ -198,14 +198,13 @@ def get_disease_project_by_status(status: str = 'PENDING') -> Dict:
 
 def get_all_disease_project_by_status(status: str = 'PENDING') -> Dict:
     """
-    Fetch disease projects with PENDING status.
+    Fetch all disease projects with a specific status.
     
     Args:
-        user_id (str): The user's ID
-        project_id (str): The project's ID
+        status (str): The status to filter by (default is 'PENDING').
     
     Returns:
-        Dict: The formatted response containing pending disease projects
+        Dict: A list of formatted disease projects with the specified status.
     """
     try:
         with get_session() as db:
@@ -228,29 +227,31 @@ def get_all_disease_project_by_status(status: str = 'PENDING') -> Dict:
                 'status': status,
             })
 
-            row = db_result.fetchone()
+            rows = db_result.fetchall()
             
-            if row:
-                disease_project = {
-                    'id': str(row.disease_project_id),
-                    'status': row.project_status,
-                    'projectId': str(row.project_id),
-                    'massTortId': str(row.mass_tort_id),
-                    'userId': str(row.user_id)
-                }
+            if rows:
+                disease_projects = []
+                for row in rows:
+                    disease_projects.append({
+                        'id': str(row.disease_project_id),
+                        'status': row.project_status,
+                        'projectId': str(row.project_id),
+                        'massTortId': str(row.mass_tort_id),
+                        'userId': str(row.user_id)
+                    })
 
                 logger.info(
-                    "[get_first_pending_disease_project] Found %s disease project %s",
-                    status, disease_project['id']
+                    "[get_all_disease_project_by_status] Found %d %s disease projects",
+                    len(disease_projects), status
                 )
-                return disease_project
+                return disease_projects
 
-            logger.info(f"[get_first_pending_disease_project] No {status} disease projects found")
-            return None
+            logger.info(f"[get_all_disease_project_by_status] No {status} disease projects found")
+            return []
 
     except Exception as e:
         logger.error(
-            "[get_pending_disease_projects] Error fetching pending disease projects: %s",
+            "[get_all_disease_project_by_status] Error fetching disease projects: %s",
             str(e)
         )
         raise

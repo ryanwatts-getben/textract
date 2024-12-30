@@ -1069,9 +1069,9 @@ def begin_scan():
 
 def check_if_index_or_input_exists(disease_projects: List[Dict]) -> Dict:
     for project in disease_projects:
-        user_id = project.get('user_id')
-        project_id = project.get('project_id')
-        mass_tort_id = project.get('mass_tort_id')
+        user_id = project['userId']
+        project_id = project['projectId']
+        mass_tort_id = project['massTortId']
 
         if not user_id or not project_id:
             raise ValueError(f"Missing required userId or projectId for project: {project}")
