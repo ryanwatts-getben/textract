@@ -466,7 +466,7 @@ class ProgressPercentage:
             self.progress = (self._seen_so_far / self._size) * 100
             logger.info(f'[app] Upload progress: {self.progress:.2f}%')
 
-@app.route('/index', methods=['POST'])
+@app.route('/index_files', methods=['POST'])
 def index_route():
     """
     Endpoint to create or update indices for all projects of a user.
