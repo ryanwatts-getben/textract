@@ -9,41 +9,34 @@ import re
 import io
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple
 import shutil
 from pypdf import PdfReader
 import csv
 import torch
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session
-
+from typing import Dict, List
 # Third-party imports
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
-import xml.etree.ElementTree as ET
-from xml.etree.ElementTree import ParseError
 
 # LlamaIndex imports
 from llama_index.core import (
     VectorStoreIndex,
     Document,
-    load_index_from_storage,
 )
 from llama_index.llms.anthropic import Anthropic
 
 # Local imports
-import db
-from examplequery import get_mass_tort_data, get_disease_project_by_status, update_disease_project_status, get_mass_torts_by_user_id, get_disease_project, create_disease_project
-from rag import create_index, preprocess_document
+from examplequery import get_mass_tort_data, get_disease_project_by_status, update_disease_project_status, get_mass_torts_by_user_id, get_disease_project, create_disease_project, update_disease_project_status_by_user, get_all_disease_project_by_status
+from rag import create_index
 from ragindex import process_user_projects
 from disease_definition_generator import generate_multiple_definitions, get_embedding_model
 from app_rag_disease_config import (
     ENV_PATH,
     AWS_UPLOAD_BUCKET_NAME,
-    ALLOWED_ORIGINS,
     CORS_CONFIG,
     SUPPORTED_EXTENSIONS,
     DEFAULT_USER_ID,
@@ -58,11 +51,10 @@ from app_rag_disease_config import (
     DocumentConfig,
     ERROR_MESSAGES,
     TEMP_DIR_PREFIX,
-    INDEX_CACHE_FILENAME,
-    INDEX_METADATA_FILENAME
+    INDEX_CACHE_FILENAME
 )
 from scrape import scrape_medline_plus
-from scan import scan_documents, ScanInput
+from scan import scan_documents, load_index, check_user_projects
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path=ENV_PATH)
@@ -993,11 +985,11 @@ def begin_scan():
                 'status': 'success',
                 'message': 'found existing record in PROCESSING state'
             }), 200
-        
-        
 
-        disease_project = get_disease_project_by_status()
+        disease_projects = get_all_disease_project_by_status()
 
+            
+        disease_project = check_if_index_or_input_exists(disease_projects)
         if not disease_project:
             logger.info("[app] No pending projects found")
             return jsonify({
@@ -1017,6 +1009,7 @@ def begin_scan():
             }), 400
 
         logger.info(f"[app] Found {len(mass_tort_data)} mass torts for user {disease_project['userId']}")
+
         data = get_mass_tort_data(
             user_id=disease_project['userId'],
             project_id=disease_project['projectId'],
@@ -1073,6 +1066,37 @@ def begin_scan():
             'status': 'error',
             'message': error_msg
         }), 500
+
+def check_if_index_or_input_exists(disease_projects: List[Dict]) -> Dict:
+    for project in disease_projects:
+        user_id = project.get('user_id')
+        project_id = project.get('project_id')
+        mass_tort_id = project.get('mass_tort_id')
+
+        if not user_id or not project_id:
+            raise ValueError(f"Missing required userId or projectId for project: {project}")
+
+        logger.info(f"[scan] Starting scan for user {user_id}")
+        
+        # Check for active projects first
+        projects_check = check_user_projects(user_id, mass_tort_id)
+        if projects_check['status'] == 'error':
+            raise ValueError(projects_check['message'])
+        
+        # Load index using the existing load_index function
+        logger.info("[scan] Loading index from S3")
+        load = load_index(user_id, project_id)
+        
+        if not load:
+            logger.error(f"[scan] Failed to load index for user {user_id}, project {project_id}")
+            update_disease_project_status_by_user(
+                project_id=project_id,
+                user_id=user_id,
+                status='ERROR'
+            )
+
+    # Return all projects with a specific status
+    return get_disease_project_by_status()
 
 @app.route('/api/disease-scanner/reports/generate-report', methods=['POST'])
 def generate_report():
