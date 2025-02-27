@@ -22,6 +22,11 @@ env:
   BILL_PROMPT_IMAGES: ${{ secrets.BILL_PROMPT_IMAGES }}
   RECORD_PROMPT_IMAGES: ${{ secrets.RECORD_PROMPT_IMAGES }}
   DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+  MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+  MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
+  MS_SCOPE: ${{ secrets.MS_SCOPE }}
+
 
 jobs:
   build-and-deploy:
@@ -59,6 +64,10 @@ jobs:
           echo "RECORD_PROMPT_IMAGES=${{ secrets.RECORD_PROMPT_IMAGES }}" >> .env
           echo "AWS_UPLOAD_BUCKET_NAME=${{ secrets.AWS_UPLOAD_BUCKET_NAME }}" >> .env
           echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
+          echo "MS_TENANT_ID=${{ secrets.MS_TENANT_ID }}" >> .env
+          echo "MS_CLIENT_ID=${{ secrets.MS_CLIENT_ID }}" >> .env
+          echo "MS_CLIENT_SECRET=${{ secrets.MS_CLIENT_SECRET }}" >> .env
+          echo "MS_SCOPE=${{ secrets.MS_SCOPE }}" >> .env
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
