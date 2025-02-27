@@ -1765,8 +1765,4 @@ if __name__ == '__main__':
         raise
     
     # Start the Flask app
-    app.run(
-        host=SERVER_CONFIG['host'],
-        port=SERVER_CONFIG['port'],
-        debug=False  # Set to False to avoid multiprocessing issues
-    )
+    app.run(host='0.0.0.0', port=5001, ssl_context=('cert.pem', 'key.pem'))
