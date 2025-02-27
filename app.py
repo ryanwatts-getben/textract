@@ -8,6 +8,7 @@ import pickle
 import re
 import io
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Tuple
 import shutil
@@ -55,6 +56,12 @@ from app_rag_disease_config import (
 )
 from scrape import scrape_medline_plus
 from scan import scan_documents, load_index, check_user_projects
+
+# Add import for Salesforce context gathering script
+from salesforce_get_all_context_by_matter import initialize_salesforce, organize_matter_context
+
+# Add import for Salesforce new client script
+from salesforce_create_new_client import process_nulaw_response_and_create_project
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path=ENV_PATH)
@@ -1451,6 +1458,285 @@ def prepare_scan():
             'validProjects': [],
             'invalidProjects': []
         }), 500
+
+# Create a simple rate limiter for the Salesforce API
+class RateLimiter:
+    def __init__(self, max_calls=5, period=60):
+        """
+        Initialize a simple rate limiter
+        
+        Args:
+            max_calls (int): Maximum number of calls allowed in the period
+            period (int): Period in seconds
+        """
+        self.max_calls = max_calls
+        self.period = period
+        self.calls = []
+        self.lock = threading.Lock()
+        
+    def is_allowed(self):
+        """
+        Check if a call is allowed under the current rate limit
+        
+        Returns:
+            bool: True if the call is allowed, False otherwise
+        """
+        with self.lock:
+            now = time.time()
+            # Remove expired calls
+            self.calls = [t for t in self.calls if now - t < self.period]
+            # Check if we're under the limit
+            if len(self.calls) < self.max_calls:
+                self.calls.append(now)
+                return True
+            return False
+
+# Initialize rate limiter for Salesforce API
+sf_rate_limiter = RateLimiter(max_calls=5, period=60)  # 5 calls per minute
+
+# Helper function to find the Salesforce CLI executable
+def find_salesforce_cli():
+    """
+    Attempt to locate the Salesforce CLI executable on Windows
+    
+    Returns:
+        str: Path to the sf.cmd file if found, None otherwise
+    """
+    try:
+        # Common locations for Salesforce CLI on Windows
+        potential_paths = [
+            os.path.expanduser("~\\AppData\\Local\\sf\\sf.cmd"),
+            os.path.expanduser("~\\AppData\\Local\\sfdx\\bin\\sf.cmd"),
+            "C:\\Program Files\\sfdx\\bin\\sf.cmd",
+            # Search in PATH
+            shutil.which("sf"),
+            shutil.which("sf.cmd"),
+        ]
+        
+        # Try to find where sf is installed
+        for path in potential_paths:
+            if path and os.path.exists(path):
+                logger.info(f"[app] Found Salesforce CLI at: {path}")
+                return path
+                
+        # Try running 'where sf' command on Windows
+        try:
+            result = subprocess.run(['where.exe', 'sf'], 
+                                   capture_output=True, 
+                                   text=True, 
+                                   check=True)
+            paths = result.stdout.strip().split('\n')
+            if paths and os.path.exists(paths[0]):
+                logger.info(f"[app] Found Salesforce CLI using 'where' command: {paths[0]}")
+                return paths[0]
+        except (subprocess.SubprocessError, FileNotFoundError):
+            logger.warning("[app] Could not locate sf using 'where' command")
+            
+        logger.warning("[app] Could not locate Salesforce CLI automatically")
+        return None
+        
+    except Exception as e:
+        logger.error(f"[app] Error finding Salesforce CLI: {str(e)}")
+        return None
+
+# Add new endpoint for Salesforce Matter context with JSON request body
+@app.route('/nulaw', methods=['POST'])
+def get_matter_context():
+    """
+    Endpoint to fetch Salesforce Matter context by MATTER_ID and create a project
+    
+    Expected request format:
+    {
+        "matter_id": "a0OUR000004DwOr2AK",
+        "sf_path": "C:\\path\\to\\sf.cmd" (optional),
+        "download_files": true (optional, defaults to true)
+    }
+    """
+    try:
+        logger.info("[app] Received Salesforce Matter context request (POST)")
+        
+        # Get request data with enhanced error handling
+        try:
+            if not request.is_json:
+                logger.error("[app] Request is not JSON format")
+                return jsonify({
+                    'error': 'Request must be in JSON format with Content-Type: application/json'
+                }), 400
+                
+            request_data = request.get_json()
+            logger.info(f"[app] Request data: {request_data}")
+            
+            if not request_data:
+                logger.error("[app] Empty request body")
+                return jsonify({
+                    'error': 'Request body cannot be empty'
+                }), 400
+                
+            if 'matter_id' not in request_data:
+                logger.error("[app] Missing matter_id in request")
+                return jsonify({
+                    'error': 'matter_id is required in the request body'
+                }), 400
+                
+        except Exception as req_error:
+            logger.error(f"[app] Error parsing request: {str(req_error)}")
+            return jsonify({
+                'error': f'Error parsing request: {str(req_error)}'
+            }), 400
+            
+        matter_id = request_data['matter_id']
+        sf_path = request_data.get('sf_path')  # Optional parameter
+        download_files = request_data.get('download_files', True)  # Optional parameter, defaults to True
+        
+        # Process the matter context
+        result = _process_matter_context(matter_id, sf_path, download_files)
+        
+        # If response is successful, create a project
+        if isinstance(result, tuple) and len(result) == 2 and result[1] == 200:
+            try:
+                response_data = result[0].get_json()
+                logger.info(f"[app] Creating project from matter context (download_files={download_files})")
+                
+                # Process the nulaw response and create a project
+                project_result = process_nulaw_response_and_create_project(response_data, False, download_files)
+                
+                if project_result and project_result.get('status') == 'success':
+                    # Add project creation result to the response
+                    response_data['project_creation'] = project_result
+                    return jsonify(response_data), 200
+                else:
+                    # Add project creation error to the response
+                    response_data['project_creation'] = {
+                        'status': 'error',
+                        'message': 'Failed to create project from matter context'
+                    }
+                    return jsonify(response_data), 200
+            except Exception as proj_error:
+                logger.error(f"[app] Error creating project from matter context: {str(proj_error)}")
+                # Still return the original result even if project creation fails
+                return result
+        
+        # Return the original result if there was an error in processing matter context
+        return result
+        
+    except Exception as e:
+        logger.error(f"[app] Error processing Salesforce Matter context request: {str(e)}")
+        return jsonify({
+            'error': f'Internal server error: {str(e)}'
+        }), 500
+
+# Update the GET endpoint for /nulaw
+@app.route('/nulaw/<matter_id>', methods=['GET'])
+def get_matter_context_by_url(matter_id):
+    """
+    Endpoint to fetch Salesforce Matter context by MATTER_ID via URL parameter and create a project
+    
+    Example: GET /nulaw/a0OUR000004DwOr2AK?sf_path=C:\\path\\to\\sf.cmd&download_files=false
+    """
+    try:
+        logger.info(f"[app] Received Salesforce Matter context request (GET) for ID: {matter_id}")
+        
+        if not matter_id:
+            logger.error("[app] Missing matter_id in URL")
+            return jsonify({
+                'error': 'matter_id is required in the URL'
+            }), 400
+        
+        # Get sf_path from query parameters if provided
+        sf_path = request.args.get('sf_path')
+        
+        # Get download_files from query parameters if provided (defaults to True)
+        download_files_param = request.args.get('download_files', 'true').lower()
+        download_files = download_files_param not in ['false', '0', 'no']
+        
+        # Process the matter context
+        result = _process_matter_context(matter_id, sf_path, download_files)
+        
+        # If response is successful, create a project
+        if isinstance(result, tuple) and len(result) == 2 and result[1] == 200:
+            try:
+                response_data = result[0].get_json()
+                logger.info(f"[app] Creating project from matter context (download_files={download_files})")
+                
+                # Process the nulaw response and create a project
+                project_result = process_nulaw_response_and_create_project(response_data, False, download_files)
+                
+                if project_result and project_result.get('status') == 'success':
+                    # Add project creation result to the response
+                    response_data['project_creation'] = project_result
+                    return jsonify(response_data), 200
+                else:
+                    # Add project creation error to the response
+                    response_data['project_creation'] = {
+                        'status': 'error',
+                        'message': 'Failed to create project from matter context'
+                    }
+                    return jsonify(response_data), 200
+            except Exception as proj_error:
+                logger.error(f"[app] Error creating project from matter context: {str(proj_error)}")
+                # Still return the original result even if project creation fails
+                return result
+        
+        # Return the original result if there was an error in processing matter context
+        return result
+            
+    except Exception as e:
+        logger.error(f"[app] Error processing Salesforce Matter context request: {str(e)}")
+        return jsonify({
+            'error': f'Internal server error: {str(e)}'
+        }), 500
+
+# Helper function for processing matter context to avoid code duplication
+def _process_matter_context(matter_id, sf_path=None, download_files=True):
+    """
+    Process a matter context request for the given matter_id
+    
+    Args:
+        matter_id (str): The Salesforce Matter ID to retrieve context for
+        sf_path (str, optional): Path to the Salesforce CLI executable
+        download_files (bool, optional): Whether to download files
+        
+    Returns:
+        flask.Response: JSON response with matter context or error
+    """
+    # Apply rate limiting
+    if not sf_rate_limiter.is_allowed():
+        logger.warning(f"[app] Rate limit exceeded for Matter ID: {matter_id}")
+        return jsonify({
+            'error': 'Rate limit exceeded. Please try again later.',
+            'status': 'rate_limited'
+        }), 429
+    
+    logger.info(f"[app] Fetching context for Matter ID: {matter_id}")
+    
+    # Set SF_CLI_PATH environment variable if provided
+    if sf_path:
+        logger.info(f"[app] Using provided Salesforce CLI path: {sf_path}")
+        os.environ['SF_CLI_PATH'] = sf_path
+    else:
+        # Try to find Salesforce CLI path automatically
+        auto_sf_path = find_salesforce_cli()
+        if auto_sf_path:
+            logger.info(f"[app] Automatically found Salesforce CLI at: {auto_sf_path}")
+            os.environ['SF_CLI_PATH'] = auto_sf_path
+    
+    # Initialize Salesforce connection
+    if not initialize_salesforce():
+        logger.error("[app] Failed to initialize Salesforce connection")
+        return jsonify({
+            'error': 'Failed to connect to Salesforce. Please check your credentials or provide the correct sf_path.'
+        }), 500
+    
+    # Collect and organize context for the Matter
+    context = organize_matter_context(matter_id)
+    
+    # Return the context as JSON response
+    return jsonify({
+        'status': 'success',
+        'matter_id': matter_id,
+        'download_files': download_files,
+        'context': context
+    }), 200
 
 if __name__ == '__main__':
     # Initialize multiprocessing support
