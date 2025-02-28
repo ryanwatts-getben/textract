@@ -9,6 +9,7 @@ import re
 import io
 import threading
 import time
+import datetime  # Add global import of datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Tuple
 import shutil
@@ -22,6 +23,7 @@ from flask_cors import CORS
 import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
+import sys
 
 # LlamaIndex imports
 from llama_index.core import (
@@ -1689,34 +1691,82 @@ def _process_matter_context(matter_id, sf_path=None, download_files=True):
             logger.info(f"[app] Automatically found Salesforce CLI at: {auto_sf_path}")
             os.environ['SF_CLI_PATH'] = auto_sf_path
     
-    # Initialize Salesforce connection with fallback mechanism
-    if not initialize_salesforce():
+    # Try up to 3 different authentication methods
+    # Method 1: Initialize Salesforce connection
+    sf_initialized = initialize_salesforce()
+    if not sf_initialized:
         logger.warning("[app] Failed to initialize Salesforce connection, attempting token refresh...")
         
-        # Try to refresh the token using salesforce_refresh_token.py functionality
+        # Method 2: Try to refresh the token using salesforce_refresh_token.py functionality
         token, instance_url = refresh_salesforce_token(update_env=True)
         
         if token and instance_url:
             logger.info("[app] Successfully refreshed Salesforce token, trying connection again")
             
-            # Try again with the new token - if the token refresh was successful, initialize_salesforce should work now
-            if not initialize_salesforce():
+            # Try again with the new token
+            sf_initialized = initialize_salesforce()
+            if not sf_initialized:
                 logger.error("[app] Still failed to initialize Salesforce connection after token refresh")
-                return jsonify({
-                    'error': 'Failed to connect to Salesforce even after token refresh. Please check your credentials or provide the correct sf_path.'
-                }), 500
-            else:
-                logger.info("[app] Successfully connected to Salesforce after token refresh")
-        else:
-            # If token refresh failed, verify CLI credentials to give detailed information
-            logger.error("[app] Failed to refresh Salesforce token")
-            verify_credentials()  # This will log detailed information about what's wrong
-            return jsonify({
-                'error': 'Failed to connect to Salesforce and token refresh failed. Please ensure you are logged in with the Salesforce CLI.'
-            }), 500
+        
+        # Method 3: If both failed, try to directly execute the salesforce_refresh_token.py script
+        if not sf_initialized:
+            logger.warning("[app] Token refresh via API failed, attempting direct script execution...")
+            try:
+                # Execute salesforce_refresh_token.py directly
+                script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "salesforce_refresh_token.py")
+                logger.info(f"[app] Executing script: {script_path}")
+                
+                # Run the script and capture output
+                result = subprocess.run(
+                    [sys.executable, script_path],
+                    capture_output=True,
+                    text=True,
+                    check=False  # Don't raise an exception on non-zero return code
+                )
+                
+                # Log the script output for debugging
+                logger.info(f"[app] Script stdout: {result.stdout}")
+                if result.stderr:
+                    logger.warning(f"[app] Script stderr: {result.stderr}")
+                    
+                # Try one more time to initialize
+                sf_initialized = initialize_salesforce()
+                if sf_initialized:
+                    logger.info("[app] Successfully connected to Salesforce after direct script execution")
+                else:
+                    # Final fallback: Try to execute CLI login directly as a subprocess
+                    logger.warning("[app] Attempting direct CLI login...")
+                    cli_path = os.environ.get('SF_CLI_PATH', 'sf')
+                    
+                    if cli_path:
+                        login_result = subprocess.run(
+                            [cli_path, "org", "login", "web", "--instance-url", "https://louisfirm.my.salesforce.com", "--alias", "louisfirm"],
+                            capture_output=True,
+                            text=True,
+                            check=False
+                        )
+                        
+                        logger.info(f"[app] CLI login stdout: {login_result.stdout}")
+                        if login_result.stderr:
+                            logger.warning(f"[app] CLI login stderr: {login_result.stderr}")
+                            
+                        # Try initializing one last time
+                        sf_initialized = initialize_salesforce()
+            except Exception as exec_error:
+                logger.error(f"[app] Error executing refresh script: {str(exec_error)}")
+    
+    # If all methods failed, return an error
+    if not sf_initialized:
+        logger.error("[app] All authentication methods failed")
+        return jsonify({
+            'error': 'Failed to connect to Salesforce after multiple attempts. This is likely a server configuration issue.',
+            'status': 'auth_failed'
+        }), 500
     
     # Collect and organize context for the Matter, passing the download_files parameter
     try:
+        # Success! We have a Salesforce connection
+        logger.info("[app] Successfully connected to Salesforce, retrieving matter context")
         context = organize_matter_context(matter_id, download_files)
         
         # Return the context as JSON response
@@ -1770,59 +1820,128 @@ def get_nulaw_documents():
         
         logger.info(f"[app] Retrieving documents for Matter ID: {matter_id}, Project ID: {project_id or 'Not provided'}")
         
-        # Step 1: First get the matter context to obtain SharePoint folder information
-        logger.info(f"[app] Getting matter context for SharePoint folder information")
-        
         # Set SF_CLI_PATH environment variable if possible
         sf_path = find_salesforce_cli()
         if sf_path:
             os.environ['SF_CLI_PATH'] = sf_path
             logger.info(f"[app] Using Salesforce CLI path: {sf_path}")
-        
-        # Initialize Salesforce connection with fallback mechanism
-        if not initialize_salesforce():
+            
+        # ============================
+        # Robust Salesforce Authentication - same approach as in _process_matter_context
+        # ============================
+        # Try up to 3 different authentication methods
+        # Method 1: Initialize Salesforce connection
+        sf_initialized = initialize_salesforce()
+        if not sf_initialized:
             logger.warning("[app] Failed to initialize Salesforce connection, attempting token refresh...")
             
-            # Try to refresh the token using salesforce_refresh_token.py functionality
+            # Method 2: Try to refresh the token using salesforce_refresh_token.py functionality
             token, instance_url = refresh_salesforce_token(update_env=True)
             
             if token and instance_url:
                 logger.info("[app] Successfully refreshed Salesforce token, trying connection again")
                 
                 # Try again with the new token
-                if not initialize_salesforce():
+                sf_initialized = initialize_salesforce()
+                if not sf_initialized:
                     logger.error("[app] Still failed to initialize Salesforce connection after token refresh")
-                    return jsonify({
-                        'error': 'Failed to connect to Salesforce even after token refresh.'
-                    }), 500
-            else:
-                logger.error("[app] Failed to refresh Salesforce token")
-                return jsonify({
-                    'error': 'Failed to connect to Salesforce and token refresh failed.'
-                }), 500
+            
+            # Method 3: If both failed, try to directly execute the salesforce_refresh_token.py script
+            if not sf_initialized:
+                logger.warning("[app] Token refresh via API failed, attempting direct script execution...")
+                try:
+                    # Execute salesforce_refresh_token.py directly
+                    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "salesforce_refresh_token.py")
+                    logger.info(f"[app] Executing script: {script_path}")
+                    
+                    # Run the script and capture output
+                    result = subprocess.run(
+                        [sys.executable, script_path],
+                        capture_output=True,
+                        text=True,
+                        check=False  # Don't raise an exception on non-zero return code
+                    )
+                    
+                    # Log the script output for debugging
+                    logger.info(f"[app] Script stdout: {result.stdout}")
+                    if result.stderr:
+                        logger.warning(f"[app] Script stderr: {result.stderr}")
+                        
+                    # Try one more time to initialize
+                    sf_initialized = initialize_salesforce()
+                    if sf_initialized:
+                        logger.info("[app] Successfully connected to Salesforce after direct script execution")
+                    else:
+                        # Final fallback: Try to execute CLI login directly as a subprocess
+                        logger.warning("[app] Attempting direct CLI login...")
+                        cli_path = os.environ.get('SF_CLI_PATH', 'sf')
+                        
+                        if cli_path:
+                            login_result = subprocess.run(
+                                [cli_path, "org", "login", "web", "--instance-url", "https://louisfirm.my.salesforce.com", "--alias", "louisfirm"],
+                                capture_output=True,
+                                text=True,
+                                check=False
+                            )
+                            
+                            logger.info(f"[app] CLI login stdout: {login_result.stdout}")
+                            if login_result.stderr:
+                                logger.warning(f"[app] CLI login stderr: {login_result.stderr}")
+                                
+                            # Try initializing one last time
+                            sf_initialized = initialize_salesforce()
+                except Exception as exec_error:
+                    logger.error(f"[app] Error executing refresh script: {str(exec_error)}")
         
-        # Get context to obtain SharePoint info
-        context = organize_matter_context(matter_id, download_files=False)
+        # If all methods failed, return an error
+        if not sf_initialized:
+            logger.error("[app] All authentication methods failed")
+            return jsonify({
+                'error': 'Failed to connect to Salesforce after multiple attempts. This is likely a server configuration issue.',
+                'status': 'auth_failed'
+            }), 500
+            
+        # ============================
+        # End of Salesforce Authentication
+        # ============================
         
-        if not context or not isinstance(context, dict):
-            logger.error(f"[app] Failed to obtain matter context for SharePoint info")
-            return jsonify({"error": "Failed to obtain matter context"}), 500
+        # Success! We have a Salesforce connection
+        logger.info("[app] Successfully connected to Salesforce, retrieving documents")
+        
+        # Step 1: Get matter context to obtain SharePoint folder information  
+        try:
+            logger.info("[app] Getting matter context for SharePoint information")
+            context = organize_matter_context(matter_id, download_files=False)
+            
+            if not context or not isinstance(context, dict):
+                logger.error(f"[app] Failed to obtain matter context for SharePoint info")
+                return jsonify({"error": "Failed to obtain matter context"}), 500
+        except Exception as context_error:
+            logger.error(f"[app] Error retrieving matter context: {str(context_error)}")
+            return jsonify({"error": f"Error retrieving matter context: {str(context_error)}"}), 500
             
         # Step 2: Get Salesforce documents
-        from salesforce_get_all_documents_by_matter_id import get_documents_by_matter_id
-        salesforce_documents = get_documents_by_matter_id(matter_id)
-        
-        # Check if we got an error from Salesforce documents
-        if isinstance(salesforce_documents, dict) and "error" in salesforce_documents:
-            logger.error(f"[app] Error in Salesforce document retrieval: {salesforce_documents['error']}")
-            # Continue with SharePoint documents even if Salesforce doc retrieval failed
-            salesforce_documents = []
+        salesforce_documents = []
+        try:
+            logger.info("[app] Retrieving documents from Salesforce")
+            from salesforce_get_all_documents_by_matter_id import get_documents_by_matter_id
+            salesforce_documents = get_documents_by_matter_id(matter_id)
             
-        logger.info(f"[app] Retrieved {len(salesforce_documents) if isinstance(salesforce_documents, list) else 0} documents from Salesforce")
+            # Check if we got an error from Salesforce documents
+            if isinstance(salesforce_documents, dict) and "error" in salesforce_documents:
+                logger.error(f"[app] Error in Salesforce document retrieval: {salesforce_documents['error']}")
+                # Continue with SharePoint documents even if Salesforce doc retrieval failed
+                salesforce_documents = []
+                
+            logger.info(f"[app] Retrieved {len(salesforce_documents) if isinstance(salesforce_documents, list) else 0} documents from Salesforce")
+        except Exception as sf_docs_error:
+            logger.error(f"[app] Error retrieving Salesforce documents: {str(sf_docs_error)}")
+            salesforce_documents = []
         
         # Step 3: Get SharePoint documents recursively
         sharepoint_documents = []
         try:
+            logger.info("[app] Retrieving documents from SharePoint")
             from share_point_get_documents import get_sharepoint_documents_for_matter
             
             # Get SharePoint documents but don't download them
@@ -1840,12 +1959,19 @@ def get_nulaw_documents():
                 
         except Exception as sp_error:
             logger.error(f"[app] Error retrieving SharePoint documents: {str(sp_error)}")
-            # Continue with just Salesforce documents
             sharepoint_documents = []
         
         # Combine both document sources
-        all_documents = salesforce_documents + sharepoint_documents
+        all_documents = []
+        if isinstance(salesforce_documents, list):
+            all_documents.extend(salesforce_documents)
+        if isinstance(sharepoint_documents, list):
+            all_documents.extend(sharepoint_documents)
+            
+        if not all_documents:
+            logger.warning(f"[app] No documents found for Matter ID: {matter_id}")
         
+        # Use the global datetime import instead of a local import
         # Return the documents as JSON
         return jsonify({
             "matter_id": matter_id,
