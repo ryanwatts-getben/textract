@@ -63,6 +63,9 @@ from salesforce_get_all_context_by_matter import initialize_salesforce, organize
 # Add import for Salesforce new client script
 from salesforce_create_new_client import process_nulaw_response_and_create_project
 
+# Add import for salesforce_refresh_token
+from salesforce_refresh_token import refresh_salesforce_token, verify_credentials, get_salesforce_headers
+
 # Load environment variables from .env file
 load_dotenv(dotenv_path=ENV_PATH)
 
@@ -1686,28 +1689,54 @@ def _process_matter_context(matter_id, sf_path=None, download_files=True):
             logger.info(f"[app] Automatically found Salesforce CLI at: {auto_sf_path}")
             os.environ['SF_CLI_PATH'] = auto_sf_path
     
-    # Initialize Salesforce connection
+    # Initialize Salesforce connection with fallback mechanism
     if not initialize_salesforce():
-        logger.error("[app] Failed to initialize Salesforce connection")
-        return jsonify({
-            'error': 'Failed to connect to Salesforce. Please check your credentials or provide the correct sf_path.'
-        }), 500
+        logger.warning("[app] Failed to initialize Salesforce connection, attempting token refresh...")
+        
+        # Try to refresh the token using salesforce_refresh_token.py functionality
+        token, instance_url = refresh_salesforce_token(update_env=True)
+        
+        if token and instance_url:
+            logger.info("[app] Successfully refreshed Salesforce token, trying connection again")
+            
+            # Try again with the new token - if the token refresh was successful, initialize_salesforce should work now
+            if not initialize_salesforce():
+                logger.error("[app] Still failed to initialize Salesforce connection after token refresh")
+                return jsonify({
+                    'error': 'Failed to connect to Salesforce even after token refresh. Please check your credentials or provide the correct sf_path.'
+                }), 500
+            else:
+                logger.info("[app] Successfully connected to Salesforce after token refresh")
+        else:
+            # If token refresh failed, verify CLI credentials to give detailed information
+            logger.error("[app] Failed to refresh Salesforce token")
+            verify_credentials()  # This will log detailed information about what's wrong
+            return jsonify({
+                'error': 'Failed to connect to Salesforce and token refresh failed. Please ensure you are logged in with the Salesforce CLI.'
+            }), 500
     
     # Collect and organize context for the Matter, passing the download_files parameter
-    context = organize_matter_context(matter_id, download_files)
-    
-    # Return the context as JSON response
-    return jsonify({
-        'status': 'success',
-        'matter_id': matter_id,
-        'download_files': download_files,
-        'context': context
-    }), 200
+    try:
+        context = organize_matter_context(matter_id, download_files)
+        
+        # Return the context as JSON response
+        return jsonify({
+            'status': 'success',
+            'matter_id': matter_id,
+            'download_files': download_files,
+            'context': context
+        }), 200
+    except Exception as e:
+        logger.error(f"[app] Error retrieving matter context: {str(e)}")
+        return jsonify({
+            'error': f'Error retrieving matter context: {str(e)}',
+            'status': 'error'
+        }), 500
 
 @app.route('/nulawdocs/', methods=['POST'])
 def get_nulaw_documents():
     """
-    Endpoint to retrieve documents for a Matter from Salesforce.
+    Endpoint to retrieve documents for a Matter from Salesforce and SharePoint.
     
     Expects:
         POST with JSON body containing:
@@ -1722,6 +1751,7 @@ def get_nulaw_documents():
         request_data = request.get_json()
         
         if not request_data:
+            logger.error("[app] No request data provided in /nulawdocs/")
             return jsonify({"error": "No request data provided"}), 400
             
         matter_id = request_data.get('matter_id')
@@ -1729,42 +1759,106 @@ def get_nulaw_documents():
         
         # Validate matter_id
         if not matter_id:
+            logger.error("[app] matter_id is required in /nulawdocs/")
             return jsonify({"error": "matter_id is required"}), 400
             
         # Basic validation of matter_id format (Salesforce IDs are typically 15 or 18 chars)
         # This helps prevent obvious SQL injection attempts
         if not isinstance(matter_id, str) or len(matter_id) not in [15, 18] or not matter_id.isalnum():
+            logger.error(f"[app] Invalid matter_id format: {matter_id}")
             return jsonify({"error": "Invalid matter_id format"}), 400
         
-        print(f"[app.py] Retrieving documents for Matter ID: {matter_id}, Project ID: {project_id or 'Not provided'}")
+        logger.info(f"[app] Retrieving documents for Matter ID: {matter_id}, Project ID: {project_id or 'Not provided'}")
         
-        # Import the documents retrieval function
-        from salesforce_get_all_documents_by_matter_id import get_documents_by_matter_id
+        # Step 1: First get the matter context to obtain SharePoint folder information
+        logger.info(f"[app] Getting matter context for SharePoint folder information")
         
-        # Find Salesforce CLI path if possible
+        # Set SF_CLI_PATH environment variable if possible
         sf_path = find_salesforce_cli()
         if sf_path:
             os.environ['SF_CLI_PATH'] = sf_path
-            print(f"[app.py] Using Salesforce CLI path: {sf_path}")
+            logger.info(f"[app] Using Salesforce CLI path: {sf_path}")
         
-        # Retrieve documents
-        documents = get_documents_by_matter_id(matter_id)
+        # Initialize Salesforce connection with fallback mechanism
+        if not initialize_salesforce():
+            logger.warning("[app] Failed to initialize Salesforce connection, attempting token refresh...")
+            
+            # Try to refresh the token using salesforce_refresh_token.py functionality
+            token, instance_url = refresh_salesforce_token(update_env=True)
+            
+            if token and instance_url:
+                logger.info("[app] Successfully refreshed Salesforce token, trying connection again")
+                
+                # Try again with the new token
+                if not initialize_salesforce():
+                    logger.error("[app] Still failed to initialize Salesforce connection after token refresh")
+                    return jsonify({
+                        'error': 'Failed to connect to Salesforce even after token refresh.'
+                    }), 500
+            else:
+                logger.error("[app] Failed to refresh Salesforce token")
+                return jsonify({
+                    'error': 'Failed to connect to Salesforce and token refresh failed.'
+                }), 500
         
-        # Check if we got an error
-        if isinstance(documents, dict) and "error" in documents:
-            return jsonify(documents), 400
+        # Get context to obtain SharePoint info
+        context = organize_matter_context(matter_id, download_files=False)
+        
+        if not context or not isinstance(context, dict):
+            logger.error(f"[app] Failed to obtain matter context for SharePoint info")
+            return jsonify({"error": "Failed to obtain matter context"}), 500
+            
+        # Step 2: Get Salesforce documents
+        from salesforce_get_all_documents_by_matter_id import get_documents_by_matter_id
+        salesforce_documents = get_documents_by_matter_id(matter_id)
+        
+        # Check if we got an error from Salesforce documents
+        if isinstance(salesforce_documents, dict) and "error" in salesforce_documents:
+            logger.error(f"[app] Error in Salesforce document retrieval: {salesforce_documents['error']}")
+            # Continue with SharePoint documents even if Salesforce doc retrieval failed
+            salesforce_documents = []
+            
+        logger.info(f"[app] Retrieved {len(salesforce_documents) if isinstance(salesforce_documents, list) else 0} documents from Salesforce")
+        
+        # Step 3: Get SharePoint documents recursively
+        sharepoint_documents = []
+        try:
+            from share_point_get_documents import get_sharepoint_documents_for_matter
+            
+            # Get SharePoint documents but don't download them
+            sharepoint_documents = get_sharepoint_documents_for_matter(
+                context, 
+                download_docs=False,
+                recursive=True  # Get documents from all subfolders
+            )
+            
+            if sharepoint_documents:
+                logger.info(f"[app] Retrieved {len(sharepoint_documents)} documents from SharePoint")
+            else:
+                logger.warning("[app] No SharePoint documents found")
+                sharepoint_documents = []
+                
+        except Exception as sp_error:
+            logger.error(f"[app] Error retrieving SharePoint documents: {str(sp_error)}")
+            # Continue with just Salesforce documents
+            sharepoint_documents = []
+        
+        # Combine both document sources
+        all_documents = salesforce_documents + sharepoint_documents
         
         # Return the documents as JSON
         return jsonify({
             "matter_id": matter_id,
             "project_id": project_id,
-            "documents": documents,
-            "document_count": len(documents) if isinstance(documents, list) else 0,
+            "documents": all_documents,
+            "document_count": len(all_documents),
+            "salesforce_document_count": len(salesforce_documents) if isinstance(salesforce_documents, list) else 0,
+            "sharepoint_document_count": len(sharepoint_documents) if isinstance(sharepoint_documents, list) else 0,
             "timestamp": datetime.datetime.now().isoformat()
         })
         
     except Exception as e:
-        print(f"[app.py] Error retrieving documents: {str(e)}")
+        logger.error(f"[app] Error retrieving documents: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
