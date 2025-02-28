@@ -21,6 +21,15 @@ get the BioBERT-mnli-snli-scinli-scitail-mednli-stsb folder in root
 
 This section describes how to use the Salesforce Client Integration features.
 
+## Architecture Overview
+
+The Salesforce integration consists of two main endpoints:
+
+1. `/nulaw` and `/nulaw/{matter_id}` - Retrieve matter context and metadata without downloading documents
+2. `/nulawdocs/` - Retrieve document information and URLs for frontend uploading
+
+This separation allows for more efficient client-side processing.
+
 ## Fetching Matter Context from Salesforce and Creating Projects
 
 ### POST /nulaw
@@ -33,14 +42,14 @@ curl -X POST "http://localhost:5000/nulaw" \
 -d '{
   "matter_id": "a0OUR000004DwOr2AK",
   "sf_path": "C:\\path\\to\\sf.cmd",
-  "download_files": true
+  "download_files": false
 }'
 ```
 
 Parameters:
 - `matter_id` (required): The Salesforce Matter ID to retrieve context for
 - `sf_path` (optional): Path to the Salesforce CLI executable
-- `download_files` (optional, default: true): Whether to download files from SharePoint
+- `download_files` (optional, default: false): Whether to download files from SharePoint
 
 ### GET /nulaw/{matter_id}
 
@@ -52,7 +61,28 @@ curl -X GET "http://localhost:5000/nulaw/a0OUR000004DwOr2AK?sf_path=C:\\path\\to
 
 Query parameters:
 - `sf_path` (optional): Path to the Salesforce CLI executable
-- `download_files` (optional, default: true): Whether to download files from SharePoint
+- `download_files` (optional, default: false): Whether to download files from SharePoint
+
+## Retrieving Documents for a Matter
+
+### POST /nulawdocs/
+
+To retrieve document information for a matter, use the `/nulawdocs/` endpoint:
+
+```bash
+curl -X POST "http://localhost:5000/nulawdocs/" \
+-H "Content-Type: application/json" \
+-d '{
+  "matter_id": "a0OUR000004DwOr2AK",
+  "projectId": "96f402ce-2a34-4875-8b8a-ae6b1b83e017"
+}'
+```
+
+Parameters:
+- `matter_id` (required): The Salesforce Matter ID to retrieve documents for
+- `projectId` (optional): The project ID for tracking/logging
+
+This endpoint will return document metadata with URLs that can be used for downloading files directly in the frontend.
 
 ## Project Creation Process
 
@@ -72,9 +102,14 @@ The created project will include all necessary fields from the Salesforce matter
 
 ### Controlling File Downloads
 
-You can control whether files are downloaded from SharePoint by setting the `download_files` parameter:
-- When set to `true` (default), files from SharePoint will be downloaded
-- When set to `false`, no files will be downloaded from SharePoint
+By default, neither endpoint automatically downloads files:
+- `/nulaw` endpoints: Files are not downloaded by default, but can be downloaded if `download_files=true` is specified
+- `/nulawdocs/` endpoint: Returns document metadata and URLs only, without downloading files
+
+This design allows the frontend to:
+1. First get matter context via `/nulaw`
+2. Then retrieve document URLs via `/nulawdocs/`
+3. Finally, download files as needed directly in the browser
 
 ## Manual Project Creation
 
