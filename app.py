@@ -1738,6 +1738,69 @@ def _process_matter_context(matter_id, sf_path=None, download_files=True):
         'context': context
     }), 200
 
+@app.route('/nulawdocs/', methods=['POST'])
+def get_nulaw_documents():
+    """
+    Endpoint to retrieve documents for a Matter from Salesforce.
+    
+    Expects:
+        POST with JSON body containing:
+        - matter_id: The Salesforce Matter ID
+        - projectId: The project ID for tracking/logging
+        
+    Returns:
+        JSON response with documents or error message
+    """
+    try:
+        # Get request parameters
+        request_data = request.get_json()
+        
+        if not request_data:
+            return jsonify({"error": "No request data provided"}), 400
+            
+        matter_id = request_data.get('matter_id')
+        project_id = request_data.get('projectId')
+        
+        # Validate matter_id
+        if not matter_id:
+            return jsonify({"error": "matter_id is required"}), 400
+            
+        # Basic validation of matter_id format (Salesforce IDs are typically 15 or 18 chars)
+        # This helps prevent obvious SQL injection attempts
+        if not isinstance(matter_id, str) or len(matter_id) not in [15, 18] or not matter_id.isalnum():
+            return jsonify({"error": "Invalid matter_id format"}), 400
+        
+        print(f"[app.py] Retrieving documents for Matter ID: {matter_id}, Project ID: {project_id or 'Not provided'}")
+        
+        # Import the documents retrieval function
+        from salesforce_get_all_documents_by_matter_id import get_documents_by_matter_id
+        
+        # Find Salesforce CLI path if possible
+        sf_path = find_salesforce_cli()
+        if sf_path:
+            os.environ['SF_CLI_PATH'] = sf_path
+            print(f"[app.py] Using Salesforce CLI path: {sf_path}")
+        
+        # Retrieve documents
+        documents = get_documents_by_matter_id(matter_id)
+        
+        # Check if we got an error
+        if isinstance(documents, dict) and "error" in documents:
+            return jsonify(documents), 400
+        
+        # Return the documents as JSON
+        return jsonify({
+            "matter_id": matter_id,
+            "project_id": project_id,
+            "documents": documents,
+            "document_count": len(documents) if isinstance(documents, list) else 0,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"[app.py] Error retrieving documents: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     # Initialize multiprocessing support
     import multiprocessing

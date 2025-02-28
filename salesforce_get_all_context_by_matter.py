@@ -466,87 +466,6 @@ def get_client_details(client_id):
         print(f"[get_all_context] Error retrieving Client details: {e}")
         return {"error": str(e)}
 
-def get_documents_by_matter_id(matter_id):
-    """
-    Get documents associated with a specific Matter ID using Salesforce ContentDocumentLink.
-    
-    Args:
-        matter_id (str): The Salesforce Matter ID
-        
-    Returns:
-        list: List of document details
-    """
-    print(f"[get_all_context] Retrieving documents for Matter ID: {matter_id}")
-    
-    # Step 1: Query ContentDocumentLink to find documents linked to the matter
-    query = (
-        f"SELECT ContentDocumentId, LinkedEntityId, ContentDocument.Title, "
-        f"ContentDocument.FileType, ContentDocument.FileExtension, ContentDocument.CreatedDate "
-        f"FROM ContentDocumentLink "
-        f"WHERE LinkedEntityId = '{matter_id}'"
-    )
-    
-    query_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v63.0/query?q={query}"
-    
-    try:
-        response = execute_salesforce_request(requests.get, query_url, headers=headers)
-        
-        document_links = response.json()
-        
-        if document_links["totalSize"] == 0:
-            print(f"[get_all_context] No documents found for Matter ID: {matter_id}")
-            return []
-        
-        print(f"[get_all_context] Found {document_links['totalSize']} documents")
-        
-        # Step 2: Get ContentVersion details for each document
-        documents = []
-        for record in document_links["records"]:
-            content_document_id = record["ContentDocumentId"]
-            
-            # Query ContentVersion to get the latest version of the document
-            version_query = (
-                f"SELECT Id, Title, PathOnClient, FileType, FileExtension, VersionNumber, "
-                f"ContentSize, ContentDocumentId, CreatedDate, LastModifiedDate "
-                f"FROM ContentVersion "
-                f"WHERE ContentDocumentId = '{content_document_id}' "
-                f"AND IsLatest = true"
-            )
-            
-            version_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v63.0/query?q={version_query}"
-            version_response = execute_salesforce_request(requests.get, version_url, headers=headers)
-            
-            version_data = version_response.json()
-            
-            if version_data["totalSize"] > 0:
-                version = version_data["records"][0]
-                
-                # Add document details to the list
-                document = {
-                    "ContentDocumentId": content_document_id,
-                    "Title": version["Title"],
-                    "FileName": version["PathOnClient"],
-                    "FileType": version["FileType"],
-                    "FileExtension": version["FileExtension"],
-                    "VersionNumber": version["VersionNumber"],
-                    "ContentSize": version["ContentSize"],
-                    "ContentVersionId": version["Id"],
-                    "CreatedDate": version["CreatedDate"],
-                    "LastModifiedDate": version["LastModifiedDate"],
-                    "DownloadUrl": f"{SALESFORCE_INSTANCE_URL}/services/data/v63.0/sobjects/ContentVersion/{version['Id']}/VersionData"
-                }
-                
-                documents.append(document)
-        
-        return documents
-    
-    except requests.exceptions.RequestException as e:
-        print(f"[get_all_context] Error retrieving documents: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"[get_all_context] Response status: {e.response.status_code}")
-            print(f"[get_all_context] Response body: {e.response.text}")
-        return []
-
 def get_related_records(matter_id):
     """
     Retrieve related records (Tasks, Events, Notes) for a Matter.
@@ -1158,69 +1077,26 @@ def get_insurance_information(matter_id):
     
     return insurance_data
 
-def describe_matter_object():
+def minify_context(data):
     """
-    Get metadata for the Matter object to identify valid fields.
-    
-    Returns:
-        dict: Object metadata
-    """
-    print("[get_all_context] Retrieving metadata for Matter object...")
-    
-    # API endpoint to describe the Matter object
-    try:
-        result = sf_query("SELECT Id FROM nu_law__Matter__c LIMIT 1")
-        if not result or result["totalSize"] == 0:
-            print("[get_all_context] Unable to find any Matter records to describe")
-            return []
-            
-        describe_result = salesforce_request(
-            'get', 
-            '/services/data/v63.0/sobjects/nu_law__Matter__c/describe'
-        )
-        
-        if not describe_result:
-            print("[get_all_context] Failed to retrieve Matter metadata")
-            return []
-            
-        # Extract field information
-        fields = []
-        for field in describe_result.get("fields", []):
-            fields.append({
-                "name": field.get("name"),
-                "label": field.get("label"),
-                "type": field.get("type"),
-                "custom": field.get("custom")
-            })
-        
-        print(f"[get_all_context] Found {len(fields)} fields on the Matter object")
-        return fields
-    
-    except Exception as e:
-        print(f"[get_all_context] Error retrieving Matter metadata: {e}")
-        return []
-
-def print_matter_fields(fields):
-    """
-    Print information about Matter fields.
+    Remove null values from a nested dictionary or list.
     
     Args:
-        fields (list): List of field metadata
+        data: Dictionary or list to minify
+        
+    Returns:
+        Minified data structure with null values removed
     """
-    print("\n" + "="*80)
-    print("MATTER OBJECT FIELDS")
-    print("="*80)
-    
-    # Sort fields by name
-    sorted_fields = sorted(fields, key=lambda x: x["name"])
-    
-    # Print field information
-    for field in sorted_fields:
-        field_type = field.get("type", "")
-        custom = "Custom" if field.get("custom") else "Standard"
-        print(f"{field['name']} ({field['label']}) - {field_type} - {custom}")
-    
-    print("="*80)
+    if isinstance(data, dict):
+        return {
+            key: minify_context(value) 
+            for key, value in data.items() 
+            if value is not None
+        }
+    elif isinstance(data, list):
+        return [minify_context(item) for item in data if item is not None]
+    else:
+        return data
 
 def organize_matter_context(matter_id):
     """
@@ -1244,8 +1120,8 @@ def organize_matter_context(matter_id):
     if matter.get("nu_law__Client__c"):
         client = get_client_details(matter["nu_law__Client__c"])
     
-    # Get documents
-    documents = get_documents_by_matter_id(matter_id)
+    # Documents are now retrieved separately through the /nulawdocs/ endpoint
+    documents = []
     
     # Get related records
     related_records = get_related_records(matter_id)
@@ -1271,7 +1147,7 @@ def organize_matter_context(matter_id):
         "matter": matter,
         "client": client,
         "sharepoint": sharepoint_info,
-        "documents": documents,
+        "documents": documents,  # Empty array - documents now fetched separately
         "related_records": related_records,
         "treatment_records": treatment_records,
         "insurance_information": insurance_information,
@@ -1311,59 +1187,6 @@ def organize_matter_context(matter_id):
         context["sharepoint_error"] = str(e)
     
     return context
-
-def minify_context(data):
-    """
-    Remove null values from a nested dictionary or list.
-    
-    Args:
-        data: Dictionary or list to minify
-        
-    Returns:
-        Minified data structure with null values removed
-    """
-    if isinstance(data, dict):
-        return {
-            key: minify_context(value) 
-            for key, value in data.items() 
-            if value is not None
-        }
-    elif isinstance(data, list):
-        return [minify_context(item) for item in data if item is not None]
-    else:
-        return data
-
-def save_context_to_file(context, filename="matter_context.json", save_minified=True):
-    """
-    Save the context to a JSON file, with option to save a minified version.
-    
-    Args:
-        context (dict): The context to save
-        filename (str): The filename to save to
-        save_minified (bool): Whether to also save a minified version
-        
-    Returns:
-        str: Path to the saved file
-    """
-    print(f"[get_all_context] Saving context to file: {filename}")
-    
-    # Save the full context
-    with open(filename, "w") as f:
-        json.dump(context, f, indent=2)
-    
-    print(f"[get_all_context] Context saved to: {filename}")
-    
-    # Save a minified version (without null values) if requested
-    if save_minified:
-        minified_filename = filename.replace(".json", "_minified.json")
-        minified_context = minify_context(context)
-        
-        with open(minified_filename, "w") as f:
-            json.dump(minified_context, f, indent=2)
-        
-        print(f"[get_all_context] Minified context saved to: {minified_filename}")
-    
-    return os.path.abspath(filename)
 
 def print_context_summary(context):
     """
@@ -1431,7 +1254,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Collect and organize context information for a Matter')
     parser.add_argument('--matter-id', default=MATTER_ID, help='Salesforce Matter ID (default: a0OUR000004DwOr2AK)')
     parser.add_argument('--output', default="matter_context.json", help='Output filename (default: matter_context.json)')
-    parser.add_argument('--describe', action='store_true', help='Describe the Matter object fields')
     parser.add_argument('--sf-path', help='Path to the Salesforce CLI executable (sf)')
     args = parser.parse_args()
     
@@ -1445,12 +1267,6 @@ if __name__ == "__main__":
         print("[get_all_context] ❌ Unable to connect to Salesforce. Exiting.")
         sys.exit(1)
     
-    # If --describe is specified, describe the Matter object and exit
-    if args.describe:
-        fields = describe_matter_object()
-        print_matter_fields(fields)
-        exit(0)
-    
     # Use the provided Matter ID or the default
     matter_id = args.matter_id
     
@@ -1463,8 +1279,23 @@ if __name__ == "__main__":
         # Print a summary of the context
         print_context_summary(context)
         
-        # Save the context to a file
-        save_context_to_file(context, args.output)
+        # Save the context to a file using json.dump
+        print(f"[get_all_context] Saving context to file: {args.output}")
+        
+        # Save the full context
+        with open(args.output, "w") as f:
+            json.dump(context, f, indent=2)
+        
+        print(f"[get_all_context] Context saved to: {args.output}")
+        
+        # Save a minified version
+        minified_filename = args.output.replace(".json", "_minified.json")
+        minified_context = minify_context(context)
+        
+        with open(minified_filename, "w") as f:
+            json.dump(minified_context, f, indent=2)
+        
+        print(f"[get_all_context] Minified context saved to: {minified_filename}")
         
         print("\n[get_all_context] Done!")
     except Exception as e:
