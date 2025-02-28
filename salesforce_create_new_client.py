@@ -180,7 +180,7 @@ def create_project(project_payload: Dict[str, Any], matter_id: str = 'unknown', 
     except Exception as log_error:
         logger.error(f"[salesforce_create_new_client] Failed to log request payload: {str(log_error)}")
     
-    url = "http://localhost:3000/api/project/create"
+    url = "http://localhost:5000/api/project/create"
     headers = {
         "Content-Type": "application/json"
     }
