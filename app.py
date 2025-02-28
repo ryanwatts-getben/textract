@@ -1543,148 +1543,114 @@ def find_salesforce_cli():
 @app.route('/nulaw', methods=['POST'])
 def get_matter_context():
     """
-    Endpoint to fetch Salesforce Matter context by MATTER_ID and create a project
+    Endpoint to retrieve context for a Matter from Salesforce.
     
-    Expected request format:
-    {
-        "matter_id": "a0OUR000004DwOr2AK",
-        "sf_path": "C:\\path\\to\\sf.cmd" (optional),
-        "download_files": true (optional, defaults to true)
-    }
+    Expects:
+        POST with JSON body containing:
+        - matter_id: The Salesforce Matter ID to retrieve context for
+        - sf_path: (optional) Path to the Salesforce CLI executable
+        - download_files: (optional, defaults to false) Whether to download files
+        
+    Returns:
+        JSON response with matter context or error message
     """
     try:
-        logger.info("[app] Received Salesforce Matter context request (POST)")
+        # Get request parameters from JSON body
+        request_data = request.get_json()
         
-        # Get request data with enhanced error handling
-        try:
-            if not request.is_json:
-                logger.error("[app] Request is not JSON format")
-                return jsonify({
-                    'error': 'Request must be in JSON format with Content-Type: application/json'
-                }), 400
-                
-            request_data = request.get_json()
-            logger.info(f"[app] Request data: {request_data}")
+        if not request_data:
+            return jsonify({"error": "No request data provided"}), 400
             
-            if not request_data:
-                logger.error("[app] Empty request body")
-                return jsonify({
-                    'error': 'Request body cannot be empty'
-                }), 400
-                
-            if 'matter_id' not in request_data:
-                logger.error("[app] Missing matter_id in request")
-                return jsonify({
-                    'error': 'matter_id is required in the request body'
-                }), 400
-                
-        except Exception as req_error:
-            logger.error(f"[app] Error parsing request: {str(req_error)}")
-            return jsonify({
-                'error': f'Error parsing request: {str(req_error)}'
-            }), 400
+        # Extract matter_id from request
+        matter_id = request_data.get('matter_id')
+        
+        if not matter_id:
+            return jsonify({"error": "matter_id is required"}), 400
             
-        matter_id = request_data['matter_id']
-        sf_path = request_data.get('sf_path')  # Optional parameter
-        download_files = request_data.get('download_files', True)  # Optional parameter, defaults to True
+        # Get sf_path from request (optional)
+        sf_path = request_data.get('sf_path')
+        
+        # Get download_files from request (optional, defaults to False)
+        download_files = request_data.get('download_files', False)  # Changed default to False
         
         # Process the matter context
         result = _process_matter_context(matter_id, sf_path, download_files)
         
-        # If response is successful, create a project
-        if isinstance(result, tuple) and len(result) == 2 and result[1] == 200:
-            try:
-                response_data = result[0].get_json()
-                logger.info(f"[app] Creating project from matter context (download_files={download_files})")
-                
-                # Process the nulaw response and create a project
-                project_result = process_nulaw_response_and_create_project(response_data, False, download_files)
-                
-                if project_result and project_result.get('status') == 'success':
-                    # Add project creation result to the response
-                    response_data['project_creation'] = project_result
-                    return jsonify(response_data), 200
-                else:
-                    # Add project creation error to the response
-                    response_data['project_creation'] = {
-                        'status': 'error',
-                        'message': 'Failed to create project from matter context'
-                    }
-                    return jsonify(response_data), 200
-            except Exception as proj_error:
-                logger.error(f"[app] Error creating project from matter context: {str(proj_error)}")
-                # Still return the original result even if project creation fails
-                return result
+        # If result[1] is not 200, return the error response
+        if result[1] != 200:
+            return result
+            
+        # Extract the response data
+        response_data = result[0].get_json()
         
-        # Return the original result if there was an error in processing matter context
-        return result
+        # Create a project from the matter context
+        logger.info(f"[app] Creating project from matter context (download_files={download_files})")
+        from salesforce_create_new_client import process_nulaw_response_and_create_project
+        project_result = process_nulaw_response_and_create_project(response_data, False, download_files)
+        
+        if project_result:
+            # Add project information to the response
+            response_data['project_id'] = project_result.get('id')
+            response_data['project_name'] = project_result.get('name')
+            response_data['project_created'] = True
+            
+        return jsonify(response_data), 200
         
     except Exception as e:
-        logger.error(f"[app] Error processing Salesforce Matter context request: {str(e)}")
-        return jsonify({
-            'error': f'Internal server error: {str(e)}'
-        }), 500
+        logger.error(f"[app] Error retrieving matter context: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 # Update the GET endpoint for /nulaw
 @app.route('/nulaw/<matter_id>', methods=['GET'])
 def get_matter_context_by_url(matter_id):
     """
-    Endpoint to fetch Salesforce Matter context by MATTER_ID via URL parameter and create a project
+    Endpoint to retrieve context for a Matter from Salesforce using URL parameters.
     
     Example: GET /nulaw/a0OUR000004DwOr2AK?sf_path=C:\\path\\to\\sf.cmd&download_files=false
+    
+    Expects:
+        URL parameters:
+        - matter_id: The Salesforce Matter ID to retrieve context for
+        - sf_path: (optional) Path to the Salesforce CLI executable
+        - download_files: (optional, defaults to false) Whether to download files
+        
+    Returns:
+        JSON response with matter context or error message
     """
     try:
-        logger.info(f"[app] Received Salesforce Matter context request (GET) for ID: {matter_id}")
-        
-        if not matter_id:
-            logger.error("[app] Missing matter_id in URL")
-            return jsonify({
-                'error': 'matter_id is required in the URL'
-            }), 400
-        
         # Get sf_path from query parameters if provided
         sf_path = request.args.get('sf_path')
         
-        # Get download_files from query parameters if provided (defaults to True)
-        download_files_param = request.args.get('download_files', 'true').lower()
+        # Get download_files from query parameters if provided (defaults to False)
+        download_files_param = request.args.get('download_files', 'false').lower()  # Changed default to 'false'
         download_files = download_files_param not in ['false', '0', 'no']
         
         # Process the matter context
         result = _process_matter_context(matter_id, sf_path, download_files)
         
-        # If response is successful, create a project
-        if isinstance(result, tuple) and len(result) == 2 and result[1] == 200:
-            try:
-                response_data = result[0].get_json()
-                logger.info(f"[app] Creating project from matter context (download_files={download_files})")
-                
-                # Process the nulaw response and create a project
-                project_result = process_nulaw_response_and_create_project(response_data, False, download_files)
-                
-                if project_result and project_result.get('status') == 'success':
-                    # Add project creation result to the response
-                    response_data['project_creation'] = project_result
-                    return jsonify(response_data), 200
-                else:
-                    # Add project creation error to the response
-                    response_data['project_creation'] = {
-                        'status': 'error',
-                        'message': 'Failed to create project from matter context'
-                    }
-                    return jsonify(response_data), 200
-            except Exception as proj_error:
-                logger.error(f"[app] Error creating project from matter context: {str(proj_error)}")
-                # Still return the original result even if project creation fails
-                return result
-        
-        # Return the original result if there was an error in processing matter context
-        return result
+        # If result[1] is not 200, return the error response
+        if result[1] != 200:
+            return result
             
+        # Extract the response data
+        response_data = result[0].get_json()
+        
+        # Create a project from the matter context
+        logger.info(f"[app] Creating project from matter context (download_files={download_files})")
+        from salesforce_create_new_client import process_nulaw_response_and_create_project
+        project_result = process_nulaw_response_and_create_project(response_data, False, download_files)
+        
+        if project_result:
+            # Add project information to the response
+            response_data['project_id'] = project_result.get('id')
+            response_data['project_name'] = project_result.get('name')
+            response_data['project_created'] = True
+            
+        return jsonify(response_data), 200
+        
     except Exception as e:
-        logger.error(f"[app] Error processing Salesforce Matter context request: {str(e)}")
-        return jsonify({
-            'error': f'Internal server error: {str(e)}'
-        }), 500
+        logger.error(f"[app] Error retrieving matter context: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 # Helper function for processing matter context to avoid code duplication
 def _process_matter_context(matter_id, sf_path=None, download_files=True):
@@ -1707,7 +1673,7 @@ def _process_matter_context(matter_id, sf_path=None, download_files=True):
             'status': 'rate_limited'
         }), 429
     
-    logger.info(f"[app] Fetching context for Matter ID: {matter_id}")
+    logger.info(f"[app] Fetching context for Matter ID: {matter_id}, download_files={download_files}")
     
     # Set SF_CLI_PATH environment variable if provided
     if sf_path:
@@ -1727,8 +1693,8 @@ def _process_matter_context(matter_id, sf_path=None, download_files=True):
             'error': 'Failed to connect to Salesforce. Please check your credentials or provide the correct sf_path.'
         }), 500
     
-    # Collect and organize context for the Matter
-    context = organize_matter_context(matter_id)
+    # Collect and organize context for the Matter, passing the download_files parameter
+    context = organize_matter_context(matter_id, download_files)
     
     # Return the context as JSON response
     return jsonify({

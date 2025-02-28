@@ -1098,12 +1098,13 @@ def minify_context(data):
     else:
         return data
 
-def organize_matter_context(matter_id):
+def organize_matter_context(matter_id, download_files=False):
     """
     Collect and organize all context information for a Matter.
     
     Args:
         matter_id (str): The Salesforce Matter ID
+        download_files (bool, optional): Whether to download files from SharePoint (defaults to False)
         
     Returns:
         dict: Organized Matter context
@@ -1165,19 +1166,23 @@ def organize_matter_context(matter_id):
         # Create a "sharepoint_files" directory in the same location as the output file
         sharepoint_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sharepoint_files")
         
-        # Try to get SharePoint documents with recursive folder traversal and download
+        print(f"[get_all_context] Download files set to: {download_files}")
+        
+        # Try to get SharePoint documents with recursive folder traversal and download only if requested
         sharepoint_documents = get_sharepoint_documents_for_matter(
             context, 
-            download_docs=True,  # Download the documents
+            download_docs=download_files,  # Only download if requested
             target_dir=sharepoint_dir,  # Save to the sharepoint_files directory
             recursive=True  # Get documents from all subfolders
         )
         
         if sharepoint_documents:
             print(f"[get_all_context] Retrieved {len(sharepoint_documents)} SharePoint documents")
-            print(f"[get_all_context] Files saved to: {sharepoint_dir}")
+            if download_files:
+                print(f"[get_all_context] Files saved to: {sharepoint_dir}")
             context["sharepoint_documents"] = sharepoint_documents
-            context["sharepoint_files_dir"] = sharepoint_dir
+            if download_files:
+                context["sharepoint_files_dir"] = sharepoint_dir
         else:
             print("[get_all_context] No SharePoint documents found or there was an error retrieving them")
             context["sharepoint_documents"] = []

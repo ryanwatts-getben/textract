@@ -80,6 +80,10 @@ def format_project_payload(nulaw_response: Dict[str, Any], download_files: bool 
             logger.error(f"[salesforce_create_new_client] Invalid response from /nulaw: {nulaw_response}")
             return None
         
+        # Get matter ID
+        matter_id = nulaw_response.get('matter_id', '')
+        logger.info(f"[salesforce_create_new_client] Including matter_id: {matter_id} in payload")
+        
         context = nulaw_response['context']
         matter = context.get('matter', {})
         
@@ -126,6 +130,7 @@ def format_project_payload(nulaw_response: Dict[str, Any], download_files: bool 
         # Format the project creation payload
         payload = {
             "clientName": client_name,
+            "matter_id": matter_id,  # Added the matter_id as requested
             "projectEmailAddress": "skinner@everycase.ai",  # Always this
             "incidentDate": incident_date,
             "description": "Injury Type: MVA",  # Always this
@@ -135,6 +140,7 @@ def format_project_payload(nulaw_response: Dict[str, Any], download_files: bool 
                 "MedsTotal": meds_total_str,  # Use string version here
                 "FormFields": {
                     "client_name": client_name,
+                    "matter_id": matter_id,  # Also add to form fields
                     "email": "skinner@everycase.ai",  # Always this
                     "incident_date": incident_date,
                     "medical_bills_total": meds_total_str,  # Also use string version here
