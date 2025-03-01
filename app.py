@@ -1696,7 +1696,6 @@ def get_matter_context():
         else:
             # If still no headers, try one more desperate approach - run CLI command directly
             logger.warning("[app] No valid Salesforce credentials found, attempting last resort method")
-            # Find the CLI path
             sf_cli_path = sf_path or find_salesforce_cli()
             if sf_cli_path:
                 os.environ['SF_CLI_PATH'] = sf_cli_path
@@ -1713,7 +1712,35 @@ def get_matter_context():
                 else:
                     # Last resort: Use standard method without pre-authenticated headers
                     logger.warning("[app] All credential methods failed, proceeding with standard process")
-                    result = _process_matter_context(matter_id, sf_path, download_files)
+                    
+                    # Try username-password authentication before giving up
+                    logger.warning("[app] Trying username-password authentication")
+                    from salesforce_refresh_token import authenticate_with_username_password
+                    
+                    # Try to authenticate with username and password
+                    username = os.getenv("SALESFORCE_USERNAME")
+                    password = os.getenv("SALESFORCE_PASSWORD")
+                    security_token = os.getenv("SALESFORCE_SECURITY_TOKEN")
+                    
+                    if username and password:
+                        logger.info("[app] Found Salesforce username/password credentials, attempting authentication")
+                        up_token, up_instance_url = authenticate_with_username_password(username, password, security_token)
+                        
+                        if up_token and up_instance_url:
+                            logger.info("[app] Successfully authenticated with username/password")
+                            headers = {
+                                "Authorization": f"Bearer {up_token}",
+                                "Content-Type": "application/json"
+                            }
+                            result = _process_matter_context(matter_id, sf_path, download_files, headers, up_instance_url)
+                        else:
+                            # If username-password auth failed, fall back to standard process
+                            logger.warning("[app] Username-password authentication failed, using standard process")
+                            result = _process_matter_context(matter_id, sf_path, download_files)
+                    else:
+                        # No username/password available, use standard process
+                        logger.warning("[app] No username/password credentials available, using standard process")
+                        result = _process_matter_context(matter_id, sf_path, download_files)
             else:
                 # If we can't find the CLI, use standard process
                 logger.warning("[app] Could not find Salesforce CLI, proceeding with standard process")
@@ -1857,7 +1884,35 @@ def get_matter_context_by_url(matter_id):
                 else:
                     # Last resort: Use standard method without pre-authenticated headers
                     logger.warning("[app] All credential methods failed, proceeding with standard process")
-                    result = _process_matter_context(matter_id, sf_path, download_files)
+                    
+                    # Try username-password authentication before giving up
+                    logger.warning("[app] Trying username-password authentication")
+                    from salesforce_refresh_token import authenticate_with_username_password
+                    
+                    # Try to authenticate with username and password
+                    username = os.getenv("SALESFORCE_USERNAME")
+                    password = os.getenv("SALESFORCE_PASSWORD")
+                    security_token = os.getenv("SALESFORCE_SECURITY_TOKEN")
+                    
+                    if username and password:
+                        logger.info("[app] Found Salesforce username/password credentials, attempting authentication")
+                        up_token, up_instance_url = authenticate_with_username_password(username, password, security_token)
+                        
+                        if up_token and up_instance_url:
+                            logger.info("[app] Successfully authenticated with username/password")
+                            headers = {
+                                "Authorization": f"Bearer {up_token}",
+                                "Content-Type": "application/json"
+                            }
+                            result = _process_matter_context(matter_id, sf_path, download_files, headers, up_instance_url)
+                        else:
+                            # If username-password auth failed, fall back to standard process
+                            logger.warning("[app] Username-password authentication failed, using standard process")
+                            result = _process_matter_context(matter_id, sf_path, download_files)
+                    else:
+                        # No username/password available, use standard process
+                        logger.warning("[app] No username/password credentials available, using standard process")
+                        result = _process_matter_context(matter_id, sf_path, download_files)
             else:
                 # If we can't find the CLI, use standard process
                 logger.warning("[app] Could not find Salesforce CLI, proceeding with standard process")

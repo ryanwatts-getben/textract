@@ -58,6 +58,31 @@ def post_to_nulaw(matter_id: str, sf_path: Optional[str] = None, download_files:
             logger.error(f"[salesforce_create_new_client] Response body: {e.response.text}")
         return None
 
+def filter_null_values(data):
+    """
+    Remove null values from a nested dictionary or list.
+    
+    This function removes:
+    - Python None values
+    - String "null" values
+    
+    Args:
+        data: Dictionary or list to filter
+        
+    Returns:
+        Filtered data structure with null values removed
+    """
+    if isinstance(data, dict):
+        return {
+            key: filter_null_values(value) 
+            for key, value in data.items() 
+            if value is not None and value != "null"
+        }
+    elif isinstance(data, list):
+        return [filter_null_values(item) for item in data if item is not None and item != "null"]
+    else:
+        return data
+
 def format_project_payload(nulaw_response: Dict[str, Any], download_files: bool = True) -> Optional[Dict[str, Any]]:
     """
     Format the response from /nulaw endpoint into the project creation payload
@@ -148,12 +173,15 @@ def format_project_payload(nulaw_response: Dict[str, Any], download_files: bool 
                     "source": "NULAW",  # Always this
                     "injury_type_other": injury_type_other,
                     "download_files": download_files,  # Also add to form fields
-                    "additional_context": json.dumps(additional_context)
+                    "additional_context": json.dumps(filter_null_values(additional_context))
                 }
             }
         }
         
-        return payload
+        # Filter out null values from the entire payload
+        filtered_payload = filter_null_values(payload)
+        
+        return filtered_payload
     except Exception as e:
         logger.error(f"[salesforce_create_new_client] Error formatting project payload: {e}")
         return None
@@ -181,7 +209,9 @@ def create_project(project_payload: Dict[str, Any], matter_id: str = 'unknown', 
     try:
         post_filename = os.path.join(logs_dir, f'salesforce_create_new_client_post_{matter_id}_{timestamp}.json')
         with open(post_filename, 'w') as f:
-            json.dump(project_payload, f, indent=2)
+            # Filter out null values before saving to log file
+            filtered_payload = filter_null_values(project_payload)
+            json.dump(filtered_payload, f, indent=2)
         logger.info(f"[salesforce_create_new_client] Request payload logged to {post_filename}")
     except Exception as log_error:
         logger.error(f"[salesforce_create_new_client] Failed to log request payload: {str(log_error)}")
@@ -200,7 +230,9 @@ def create_project(project_payload: Dict[str, Any], matter_id: str = 'unknown', 
             response_data = response.json()
             response_filename = os.path.join(logs_dir, f'salesforce_create_new_client_response_{matter_id}_{timestamp}.json')
             with open(response_filename, 'w') as f:
-                json.dump(response_data, f, indent=2)
+                # Filter out null values before saving to log file
+                filtered_response = filter_null_values(response_data)
+                json.dump(filtered_response, f, indent=2)
             logger.info(f"[salesforce_create_new_client] Response payload logged to {response_filename}")
         except Exception as log_error:
             logger.error(f"[salesforce_create_new_client] Failed to log response: {str(log_error)}")
@@ -265,7 +297,9 @@ def process_nulaw_response_and_create_project(nulaw_response: Dict[str, Any], dr
     try:
         response_filename = os.path.join(logs_dir, f'salesforce_nulaw_response_{matter_id}_{timestamp}.json')
         with open(response_filename, 'w') as f:
-            json.dump(nulaw_response, f, indent=2)
+            # Filter out null values before saving to log file
+            filtered_nulaw_response = filter_null_values(nulaw_response)
+            json.dump(filtered_nulaw_response, f, indent=2)
         logger.info(f"[salesforce_create_new_client] Input nulaw response logged to {response_filename}")
     except Exception as log_error:
         logger.error(f"[salesforce_create_new_client] Failed to log nulaw response: {str(log_error)}")
@@ -280,7 +314,9 @@ def process_nulaw_response_and_create_project(nulaw_response: Dict[str, Any], dr
     try:
         payload_filename = os.path.join(logs_dir, f'salesforce_formatted_payload_{matter_id}_{timestamp}.json')
         with open(payload_filename, 'w') as f:
-            json.dump(project_payload, f, indent=2)
+            # Filter out null values before saving to log file
+            filtered_project_payload = filter_null_values(project_payload)
+            json.dump(filtered_project_payload, f, indent=2)
         logger.info(f"[salesforce_create_new_client] Formatted project payload logged to {payload_filename}")
     except Exception as log_error:
         logger.error(f"[salesforce_create_new_client] Failed to log formatted payload: {str(log_error)}")

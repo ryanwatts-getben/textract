@@ -160,6 +160,83 @@ def get_cli_credentials(org_alias='louisfirm'):
         print(f"[salesforce_refresh] Error parsing CLI output: {e}")
         return None, None
 
+def authenticate_with_username_password(username=None, password=None, security_token=None, instance_url=None):
+    """
+    Authenticate with Salesforce using username and password (plus security token).
+    This method is suitable for headless server environments.
+    
+    Args:
+        username (str): Salesforce username
+        password (str): Salesforce password
+        security_token (str): Salesforce security token (may be needed depending on IP restrictions)
+        instance_url (str): Salesforce instance URL (e.g., https://louisfirm.my.salesforce.com)
+        
+    Returns:
+        tuple: (access_token, instance_url) or (None, None) if authentication fails
+    """
+    print("[salesforce_refresh] Attempting to authenticate with username and password")
+    
+    # Get credentials from environment if not provided
+    if not username:
+        username = os.getenv("SALESFORCE_USERNAME")
+    if not password:
+        password = os.getenv("SALESFORCE_PASSWORD")
+    if not security_token:
+        security_token = os.getenv("SALESFORCE_SECURITY_TOKEN")
+    if not instance_url:
+        instance_url = os.getenv("SALESFORCE_INSTANCE_URL", "https://louisfirm.my.salesforce.com")
+        
+    # Check if credentials are available
+    if not username or not password:
+        print("[salesforce_refresh] Username or password not provided")
+        return None, None
+        
+    # Combine password and security token if token is provided
+    if security_token:
+        password_with_token = password + security_token
+    else:
+        password_with_token = password
+        
+    # Get the login endpoint - this is the same for all Salesforce instances
+    login_url = "https://login.salesforce.com/services/oauth2/token"
+    
+    # Prepare payload for OAuth token request
+    payload = {
+        "grant_type": "password",
+        "client_id": os.getenv("SALESFORCE_CLIENT_ID", "PlatformCLI"),  # Default to PlatformCLI for SF CLI
+        "client_secret": os.getenv("SALESFORCE_CLIENT_SECRET", ""),
+        "username": username,
+        "password": password_with_token
+    }
+    
+    try:
+        # Make request to get token
+        response = requests.post(login_url, data=payload)
+        
+        # Check for successful response
+        if response.status_code == 200:
+            data = response.json()
+            access_token = data.get("access_token")
+            instance_url = data.get("instance_url")
+            
+            print(f"[salesforce_refresh] Successfully authenticated with username/password method")
+            
+            # Save token to environment variables
+            if access_token and instance_url:
+                if "update_env_file" in globals():
+                    update_env_file("SALESFORCE_ACCESS_TOKEN", access_token)
+                    update_env_file("SALESFORCE_INSTANCE_URL", instance_url)
+                
+                return access_token, instance_url
+        else:
+            print(f"[salesforce_refresh] Authentication failed with status code: {response.status_code}")
+            print(f"[salesforce_refresh] Response: {response.text}")
+                
+    except Exception as e:
+        print(f"[salesforce_refresh] Error during username-password authentication: {e}")
+        
+    return None, None
+
 def refresh_salesforce_token(update_env=True, org_alias='louisfirm'):
     """
     Refresh Salesforce access token using CLI.
@@ -201,8 +278,17 @@ def refresh_salesforce_token(update_env=True, org_alias='louisfirm'):
             return get_cli_credentials(org_alias)
         else:
             print(f"[salesforce_refresh] CLI login failed: {stderr}")
+            
+            # If we're in a headless environment (likely server), try username-password method
+            if "PortInUseError" in stderr or "browser" in stderr.lower() or "display" in stderr.lower():
+                print("[salesforce_refresh] Detected headless environment, trying username-password authentication")
+                return authenticate_with_username_password()
     except Exception as e:
         print(f"[salesforce_refresh] Error during CLI login: {e}")
+        
+        # Try username-password method as fallback
+        print("[salesforce_refresh] Falling back to username-password authentication")
+        return authenticate_with_username_password()
     
     return None, None
 
