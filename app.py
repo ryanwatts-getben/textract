@@ -2158,31 +2158,33 @@ def get_nulaw_documents():
             logger.error(f"[app] Error retrieving matter context: {str(context_error)}")
             return jsonify({"error": f"Error retrieving matter context: {str(context_error)}"}), 500
             
-        # Step 2: Get Salesforce documents
-        salesforce_documents = []
-        try:
-            logger.info("[app] Retrieving documents from Salesforce")
-            from salesforce_get_all_documents_by_matter_id import get_documents_by_matter_id
-            salesforce_documents = get_documents_by_matter_id(matter_id)
-            
-            # Check if we got an error from Salesforce documents
-            if isinstance(salesforce_documents, dict) and "error" in salesforce_documents:
-                logger.error(f"[app] Error in Salesforce document retrieval: {salesforce_documents['error']}")
-                # Continue with SharePoint documents even if Salesforce doc retrieval failed
-                salesforce_documents = []
-                
-            logger.info(f"[app] Retrieved {len(salesforce_documents) if isinstance(salesforce_documents, list) else 0} documents from Salesforce")
-        except Exception as sf_docs_error:
-            logger.error(f"[app] Error retrieving Salesforce documents: {str(sf_docs_error)}")
-            salesforce_documents = []
+        # Initialize result documents list
+        result_documents = []
         
-        # Step 3: Get SharePoint documents recursively
+        # Step 2: Get SharePoint documents recursively
         sharepoint_documents = []
         try:
             logger.info("[app] Retrieving documents from SharePoint")
-            from share_point_get_documents import get_sharepoint_documents_for_matter
+            from share_point_get_documents import get_sharepoint_documents_for_matter, download_file, get_sharepoint_site_id, get_drive_id
+            from share_point_refresh_token import get_bearer_token, get_auth_headers
             
-            # Get SharePoint documents but don't download them
+            # Force refresh SharePoint token to ensure we have valid authentication
+            sharepoint_token = get_bearer_token(force_refresh=True)
+            if not sharepoint_token:
+                logger.error("[app] Failed to get SharePoint authentication token")
+                return jsonify({"error": "Failed to authenticate with SharePoint"}), 401
+            else:
+                logger.info("[app] Successfully authenticated with SharePoint")
+            
+            # Get site and drive IDs for downloading files
+            site_id = get_sharepoint_site_id()
+            drive_id = None
+            if site_id:
+                drive_id = get_drive_id(site_id)
+                if not drive_id:
+                    logger.warning("[app] Could not get SharePoint drive ID")
+            
+            # Get documents from SharePoint
             sharepoint_documents = get_sharepoint_documents_for_matter(
                 context, 
                 download_docs=False,
@@ -2199,95 +2201,97 @@ def get_nulaw_documents():
             logger.error(f"[app] Error retrieving SharePoint documents: {str(sp_error)}")
             sharepoint_documents = []
         
-        # Function to download and encode file content
-        def download_and_encode_file(url, source):
-            try:
-                logger.info(f"[app] Downloading file from {source}: {url[:100]}...")
-                
-                # Set appropriate headers based on source
-                headers = {}
-                if source == "salesforce":
-                    # Include Salesforce headers when needed
-                    if hasattr(sf_initialized, 'headers') and sf_initialized.headers:
-                        headers = sf_initialized.headers
-                
-                # Download file with timeout to prevent hanging
-                response = requests.get(url, headers=headers, timeout=30)
-                
-                # Raise exception for HTTP errors
-                response.raise_for_status()
-                
-                # Get file content
-                file_content = response.content
-                
-                # Encode to base64
-                base64_content = base64.b64encode(file_content).decode('utf-8')
-                
-                logger.info(f"[app] Successfully downloaded and encoded file ({len(file_content)} bytes)")
-                
-                return base64_content
-            except requests.exceptions.RequestException as e:
-                logger.error(f"[app] Error downloading file from {source}: {str(e)}")
-                return None
-            except Exception as e:
-                logger.error(f"[app] Unexpected error downloading file: {str(e)}")
-                return None
-        
-        # Initialize result documents list
-        result_documents = []
-        
-        # Process Salesforce documents
-        if isinstance(salesforce_documents, list):
-            for doc in salesforce_documents:
-                if isinstance(doc, dict) and doc.get("DownloadUrl"):
-                    # Get file details
-                    filename = doc.get("FileName") or doc.get("Title") or "Unnamed Document"
-                    content_type = doc.get("FileType", "application/octet-stream")
-                    download_url = doc.get("DownloadUrl")
-                    
-                    # Download and encode file
-                    base64_data = download_and_encode_file(download_url, "salesforce")
-                    
-                    if base64_data:
-                        # Add to result list
-                        result_documents.append({
-                            "filename": filename,
-                            "data": base64_data,
-                            "contentType": content_type
-                        })
-                        logger.info(f"[app] Added Salesforce document: {filename}")
-                    else:
-                        logger.warning(f"[app] Failed to download Salesforce document: {filename}")
-        
         # Process SharePoint documents
         if isinstance(sharepoint_documents, list):
             for doc in sharepoint_documents:
-                if isinstance(doc, dict) and doc.get("@microsoft.graph.downloadUrl"):
+                if isinstance(doc, dict):
                     # Get file details
                     file_name = doc.get("name", "")
+                    if not file_name and "originalName" in doc:
+                        file_name = doc["originalName"]
                     if not file_name and "parentReference" in doc and "name" in doc["parentReference"]:
                         file_name = doc["parentReference"]["name"]
                     
-                    filename = file_name or "Unnamed Document"
-                    content_type = doc.get("file", {}).get("mimeType", "application/octet-stream")
-                    download_url = doc.get("@microsoft.graph.downloadUrl")
+                    if not file_name:
+                        file_name = "Unnamed Document"
+                        logger.warning(f"[app] Document has no name: {doc.get('id', 'unknown ID')}")
                     
-                    # Download and encode file
-                    base64_data = download_and_encode_file(download_url, "sharepoint")
+                    # Determine content type based on file extension
+                    content_type = "application/octet-stream"
+                    if "fileType" in doc and doc["fileType"]:
+                        content_type = f"application/{doc['fileType']}"
+                    elif "file" in doc and "mimeType" in doc["file"]:
+                        content_type = doc["file"]["mimeType"]
+                    elif file_name:
+                        _, file_ext = os.path.splitext(file_name)
+                        if file_ext.lower() in ['.pdf']:
+                            content_type = "application/pdf"
+                        elif file_ext.lower() in ['.doc', '.docx']:
+                            content_type = "application/msword"
+                        elif file_ext.lower() in ['.xls', '.xlsx']:
+                            content_type = "application/vnd.ms-excel"
                     
-                    if base64_data:
-                        # Add to result list
-                        result_documents.append({
-                            "filename": filename,
-                            "data": base64_data, 
-                            "contentType": content_type
-                        })
-                        logger.info(f"[app] Added SharePoint document: {filename}")
-                    else:
-                        logger.warning(f"[app] Failed to download SharePoint document: {filename}")
+                    # Try to download using the helper functions first
+                    if "id" in doc and drive_id:
+                        try:
+                            logger.info(f"[app] Downloading SharePoint file: {file_name} using helper function")
+                            file_result = download_file(drive_id, doc["id"])
+                            if file_result:
+                                filename, file_content = file_result
+                                
+                                # Encode to base64
+                                base64_content = base64.b64encode(file_content).decode('utf-8')
+                                
+                                # Add to result list
+                                result_documents.append({
+                                    "filename": filename,
+                                    "data": base64_content,
+                                    "contentType": content_type
+                                })
+                                logger.info(f"[app] Added SharePoint document: {filename}")
+                                continue  # Skip to next document
+                        except Exception as download_error:
+                            logger.error(f"[app] Error downloading SharePoint file with helper: {str(download_error)}")
+                            # Will fall back to other methods
+                    
+                    # If helper method failed, try using the download URL
+                    download_url = None
+                    if "@microsoft.graph.downloadUrl" in doc:
+                        download_url = doc.get("@microsoft.graph.downloadUrl")
+                    elif "webUrl" in doc:
+                        download_url = doc.get("webUrl")
+                    
+                    if download_url:
+                        try:
+                            logger.info(f"[app] Downloading SharePoint file from URL: {file_name}")
+                            
+                            # Use the SharePoint authentication headers
+                            headers = get_auth_headers()
+                            
+                            # Download file with timeout
+                            response = requests.get(download_url, headers=headers, timeout=30)
+                            response.raise_for_status()
+                            file_content = response.content
+                            
+                            # Encode to base64
+                            base64_content = base64.b64encode(file_content).decode('utf-8')
+                            
+                            # Add to result list
+                            result_documents.append({
+                                "filename": file_name,
+                                "data": base64_content,
+                                "contentType": content_type
+                            })
+                            logger.info(f"[app] Added SharePoint document: {file_name}")
+                        except Exception as download_error:
+                            logger.error(f"[app] Error downloading SharePoint file from URL: {str(download_error)}")
+                            logger.warning(f"[app] Failed to download SharePoint document: {file_name}")
         
+        # If needed, we can also get Salesforce documents, but that seems unnecessary based on the error
+        # and the fact that the documents are stored in SharePoint
+                
         # Log summary
-        logger.info(f"[app] Successfully processed {len(result_documents)} documents out of {len(salesforce_documents) + len(sharepoint_documents)} available")
+        logger.info(f"[app] Successfully processed {len(result_documents)} documents out of {len(sharepoint_documents)} available")
         
         if not result_documents:
             logger.warning(f"[app] No documents could be downloaded for Matter ID: {matter_id}")
