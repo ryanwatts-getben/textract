@@ -2164,7 +2164,8 @@ def get_nulaw_documents():
             {
                 "filename": "filename.pdf",
                 "data": "base64EncodedData...",
-                "contentType": "application/pdf"
+                "contentType": "application/pdf",
+                "folder": "Medical Bills"  // Optional field containing the parent folder name
             },
             ...
         ]
@@ -2346,7 +2347,8 @@ def get_nulaw_documents():
                                 result_documents.append({
                                     "filename": filename,
                                     "data": base64_content,
-                                    "contentType": content_type
+                                    "contentType": content_type,
+                                    "folder": doc.get("parentReference", {}).get("name") if "parentReference" in doc else None
                                 })
                                 logger.info(f"[app] Added SharePoint document: {filename}")
                                 continue  # Skip to next document
@@ -2380,7 +2382,8 @@ def get_nulaw_documents():
                             result_documents.append({
                                 "filename": file_name,
                                 "data": base64_content,
-                                "contentType": content_type
+                                "contentType": content_type,
+                                "folder": doc.get("parentReference", {}).get("name") if "parentReference" in doc else None
                             })
                             logger.info(f"[app] Added SharePoint document: {file_name}")
                         except Exception as download_error:
