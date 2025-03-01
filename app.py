@@ -18,7 +18,7 @@ import csv
 import torch
 from typing import Dict, List
 # Third-party imports
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 import boto3
 from botocore.exceptions import ClientError
@@ -2066,6 +2066,7 @@ def _process_matter_context(matter_id, sf_path=None, download_files=True, header
         }), 500
 
 @app.route('/nulawdocs/', methods=['POST'])
+@app.route('/nulawdocs', methods=['POST'])  # Add route without trailing slash to prevent 308 redirects
 def get_nulaw_documents():
     """
     Endpoint to retrieve documents for a Matter from Salesforce and SharePoint.
@@ -2091,7 +2092,7 @@ def get_nulaw_documents():
         request_data = request.get_json()
         
         if not request_data:
-            logger.error("[app] No request data provided in /nulawdocs/")
+            logger.error("[app] No request data provided in /nulawdocs")
             return jsonify({"error": "No request data provided"}), 400
             
         matter_id = request_data.get('matter_id')
@@ -2099,7 +2100,7 @@ def get_nulaw_documents():
         
         # Validate matter_id
         if not matter_id:
-            logger.error("[app] matter_id is required in /nulawdocs/")
+            logger.error("[app] matter_id is required in /nulawdocs")
             return jsonify({"error": "matter_id is required"}), 400
             
         # Basic validation of matter_id format (Salesforce IDs are typically 15 or 18 chars)
@@ -2295,8 +2296,19 @@ def get_nulaw_documents():
         
         if not result_documents:
             logger.warning(f"[app] No documents could be downloaded for Matter ID: {matter_id}")
+            
+        # Check if the total size of the response is large
+        total_size = sum(len(doc.get("data", "")) for doc in result_documents)
+        if total_size > 10 * 1024 * 1024:  # If total size is greater than 10MB
+            logger.info(f"[app] Large response detected ({total_size/1024/1024:.2f}MB), using chunked response")
+            # Process larger responses in chunks to avoid content-length mismatch
+            response = make_response(json.dumps(result_documents))
+            response.headers['Content-Type'] = 'application/json'
+            # Disable content-length to use chunked transfer encoding
+            response.headers.pop('Content-Length', None)
+            return response
         
-        # Return array of documents directly (not wrapped in an object)
+        # For smaller responses, use standard jsonify
         return jsonify(result_documents)
         
     except Exception as e:
