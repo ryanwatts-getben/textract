@@ -60,13 +60,13 @@ from scrape import scrape_medline_plus
 from scan import scan_documents, load_index, check_user_projects
 
 # Add import for Salesforce context gathering script
-from salesforce_get_all_context_by_matter import initialize_salesforce, organize_matter_context
+from salesforce_get_all_context_by_matter import initialize_salesforce, organize_matter_context, set_salesforce_auth_globals
 
 # Add import for Salesforce new client script
 from salesforce_create_new_client import process_nulaw_response_and_create_project
 
 # Add import for salesforce_refresh_token
-from salesforce_refresh_token import refresh_salesforce_token, verify_credentials, get_salesforce_headers
+from salesforce_refresh_token import refresh_salesforce_token, verify_credentials, get_salesforce_headers, get_cli_credentials, update_env_file
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path=ENV_PATH)
@@ -1576,10 +1576,40 @@ def get_matter_context():
         sf_path = request_data.get('sf_path')
         
         # Get download_files from request (optional, defaults to False)
-        download_files = request_data.get('download_files', False)  # Changed default to False
+        download_files = request_data.get('download_files', False)
+
+        logger.info(f"[app] Fetching context for Matter ID: {matter_id}, download_files={download_files}")
         
-        # Process the matter context
-        result = _process_matter_context(matter_id, sf_path, download_files)
+        # Import necessary functions from salesforce_refresh_token
+        from salesforce_refresh_token import get_salesforce_headers, get_cli_credentials, update_env_file
+        
+        # First, try to get headers directly without browser authentication
+        headers, instance_url = get_salesforce_headers(force_refresh=False)
+        
+        # If we couldn't get headers, try reading from .env or cached values
+        if not headers or not instance_url:
+            logger.warning("[app] Failed to get Salesforce headers, checking for stored credentials...")
+            
+            # Try to get credentials from stored .env values
+            load_dotenv()
+            token = os.getenv("SALESFORCE_ACCESS_TOKEN")
+            instance_url = os.getenv("SALESFORCE_INSTANCE_URL")
+            
+            if token and instance_url:
+                logger.info("[app] Found stored Salesforce credentials in .env")
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                }
+        
+        # If we have headers, pass them to _process_matter_context
+        if headers and instance_url:
+            logger.info("[app] Using existing Salesforce credentials")
+            result = _process_matter_context(matter_id, sf_path, download_files, headers, instance_url)
+        else:
+            # If all else fails, process without pre-authenticated headers
+            logger.warning("[app] No valid Salesforce credentials found, proceeding with standard process")
+            result = _process_matter_context(matter_id, sf_path, download_files)
         
         # If result[1] is not 200, return the error response
         if result[1] != 200:
@@ -1658,7 +1688,7 @@ def get_matter_context_by_url(matter_id):
         return jsonify({"error": str(e)}), 500
 
 # Helper function for processing matter context to avoid code duplication
-def _process_matter_context(matter_id, sf_path=None, download_files=True):
+def _process_matter_context(matter_id, sf_path=None, download_files=True, headers=None, instance_url=None):
     """
     Process a matter context request for the given matter_id
     
@@ -1666,6 +1696,8 @@ def _process_matter_context(matter_id, sf_path=None, download_files=True):
         matter_id (str): The Salesforce Matter ID to retrieve context for
         sf_path (str, optional): Path to the Salesforce CLI executable
         download_files (bool, optional): Whether to download files
+        headers (dict, optional): Headers for pre-authenticated requests
+        instance_url (str, optional): Instance URL for pre-authenticated requests
         
     Returns:
         flask.Response: JSON response with matter context or error
@@ -1691,69 +1723,79 @@ def _process_matter_context(matter_id, sf_path=None, download_files=True):
             logger.info(f"[app] Automatically found Salesforce CLI at: {auto_sf_path}")
             os.environ['SF_CLI_PATH'] = auto_sf_path
     
-    # Try up to 3 different authentication methods
-    # Method 1: Initialize Salesforce connection
-    sf_initialized = initialize_salesforce()
+    # Set headers and instance_url as global variables in the context module if provided
+    sf_initialized = False
+    if headers and instance_url:
+        logger.info("[app] Using pre-authenticated Salesforce headers")
+        # Use the function that's already imported at the top of the file
+        sf_initialized = set_salesforce_auth_globals(headers, instance_url)
+        if sf_initialized:
+            logger.info("[app] Successfully set pre-authenticated Salesforce headers")
+    
+    # If no pre-authenticated headers, try normal initialization methods
     if not sf_initialized:
-        logger.warning("[app] Failed to initialize Salesforce connection, attempting token refresh...")
-        
-        # Method 2: Try to refresh the token using salesforce_refresh_token.py functionality
-        token, instance_url = refresh_salesforce_token(update_env=True)
-        
-        if token and instance_url:
-            logger.info("[app] Successfully refreshed Salesforce token, trying connection again")
-            
-            # Try again with the new token
-            sf_initialized = initialize_salesforce()
-            if not sf_initialized:
-                logger.error("[app] Still failed to initialize Salesforce connection after token refresh")
-        
-        # Method 3: If both failed, try to directly execute the salesforce_refresh_token.py script
+        # Method 1: Initialize Salesforce connection
+        sf_initialized = initialize_salesforce()
         if not sf_initialized:
-            logger.warning("[app] Token refresh via API failed, attempting direct script execution...")
-            try:
-                # Execute salesforce_refresh_token.py directly
-                script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "salesforce_refresh_token.py")
-                logger.info(f"[app] Executing script: {script_path}")
+            logger.warning("[app] Failed to initialize Salesforce connection, attempting token refresh...")
+            
+            # Method 2: Try to refresh the token using salesforce_refresh_token.py functionality
+            token, instance_url = refresh_salesforce_token(update_env=True)
+            
+            if token and instance_url:
+                logger.info("[app] Successfully refreshed Salesforce token, trying connection again")
                 
-                # Run the script and capture output
-                result = subprocess.run(
-                    [sys.executable, script_path],
-                    capture_output=True,
-                    text=True,
-                    check=False  # Don't raise an exception on non-zero return code
-                )
-                
-                # Log the script output for debugging
-                logger.info(f"[app] Script stdout: {result.stdout}")
-                if result.stderr:
-                    logger.warning(f"[app] Script stderr: {result.stderr}")
-                    
-                # Try one more time to initialize
+                # Try again with the new token
                 sf_initialized = initialize_salesforce()
-                if sf_initialized:
-                    logger.info("[app] Successfully connected to Salesforce after direct script execution")
-                else:
-                    # Final fallback: Try to execute CLI login directly as a subprocess
-                    logger.warning("[app] Attempting direct CLI login...")
-                    cli_path = os.environ.get('SF_CLI_PATH', 'sf')
+                if not sf_initialized:
+                    logger.error("[app] Still failed to initialize Salesforce connection after token refresh")
+            
+            # Method 3: If both failed, try to directly execute the salesforce_refresh_token.py script
+            if not sf_initialized:
+                logger.warning("[app] Token refresh via API failed, attempting direct script execution...")
+                try:
+                    # Execute salesforce_refresh_token.py directly
+                    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "salesforce_refresh_token.py")
+                    logger.info(f"[app] Executing script: {script_path}")
                     
-                    if cli_path:
-                        login_result = subprocess.run(
-                            [cli_path, "org", "login", "web", "--instance-url", "https://louisfirm.my.salesforce.com", "--alias", "louisfirm"],
-                            capture_output=True,
-                            text=True,
-                            check=False
-                        )
+                    # Run the script and capture output
+                    result = subprocess.run(
+                        [sys.executable, script_path],
+                        capture_output=True,
+                        text=True,
+                        check=False  # Don't raise an exception on non-zero return code
+                    )
+                    
+                    # Log the script output for debugging
+                    logger.info(f"[app] Script stdout: {result.stdout}")
+                    if result.stderr:
+                        logger.warning(f"[app] Script stderr: {result.stderr}")
                         
-                        logger.info(f"[app] CLI login stdout: {login_result.stdout}")
-                        if login_result.stderr:
-                            logger.warning(f"[app] CLI login stderr: {login_result.stderr}")
+                    # Try one more time to initialize
+                    sf_initialized = initialize_salesforce()
+                    if sf_initialized:
+                        logger.info("[app] Successfully connected to Salesforce after direct script execution")
+                    else:
+                        # Final fallback: Try to execute CLI login directly as a subprocess
+                        logger.warning("[app] Attempting direct CLI login...")
+                        cli_path = os.environ.get('SF_CLI_PATH', 'sf')
+                        
+                        if cli_path:
+                            login_result = subprocess.run(
+                                [cli_path, "org", "login", "web", "--instance-url", "https://louisfirm.my.salesforce.com", "--alias", "louisfirm"],
+                                capture_output=True,
+                                text=True,
+                                check=False
+                            )
                             
-                        # Try initializing one last time
-                        sf_initialized = initialize_salesforce()
-            except Exception as exec_error:
-                logger.error(f"[app] Error executing refresh script: {str(exec_error)}")
+                            logger.info(f"[app] CLI login stdout: {login_result.stdout}")
+                            if login_result.stderr:
+                                logger.warning(f"[app] CLI login stderr: {login_result.stderr}")
+                                
+                            # Try initializing one last time
+                            sf_initialized = initialize_salesforce()
+                except Exception as exec_error:
+                    logger.error(f"[app] Error executing refresh script: {str(exec_error)}")
     
     # If all methods failed, return an error
     if not sf_initialized:
@@ -1767,6 +1809,7 @@ def _process_matter_context(matter_id, sf_path=None, download_files=True):
     try:
         # Success! We have a Salesforce connection
         logger.info("[app] Successfully connected to Salesforce, retrieving matter context")
+        # Use the function that's already imported at the top of the file
         context = organize_matter_context(matter_id, download_files)
         
         # Return the context as JSON response

@@ -21,6 +21,42 @@ load_dotenv()
 headers = None
 SALESFORCE_INSTANCE_URL = None
 
+def set_salesforce_auth_globals(auth_headers, auth_instance_url):
+    """
+    Set global authentication headers and instance URL directly.
+    This allows bypassing CLI authentication if we already have valid credentials.
+    
+    Args:
+        auth_headers (dict): Pre-authenticated Salesforce API headers with valid token
+        auth_instance_url (str): Salesforce instance URL
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    global headers, SALESFORCE_INSTANCE_URL
+    
+    if not auth_headers or not auth_instance_url:
+        print("[get_all_context] Invalid auth headers or instance URL provided")
+        return False
+    
+    # Set global variables
+    headers = auth_headers
+    SALESFORCE_INSTANCE_URL = auth_instance_url
+    
+    # Verify the provided credentials by making a simple API call
+    test_url = f"{SALESFORCE_INSTANCE_URL}/services/data/v63.0/sobjects/"
+    try:
+        response = requests.get(test_url, headers=headers)
+        if response.status_code == 200:
+            print(f"[get_all_context] ✅ Successfully connected to Salesforce with provided credentials: {SALESFORCE_INSTANCE_URL}")
+            return True
+        else:
+            print(f"[get_all_context] ❌ Provided credentials failed verification. Status code: {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"[get_all_context] ❌ Error verifying provided credentials: {str(e)}")
+        return False
+
 def initialize_salesforce():
     """Initialize Salesforce connection and verify credentials.
     
