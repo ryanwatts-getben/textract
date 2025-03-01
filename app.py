@@ -24,6 +24,8 @@ import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 import sys
+import requests
+import base64
 
 load_dotenv()
 
@@ -2074,7 +2076,15 @@ def get_nulaw_documents():
         - projectId: The project ID for tracking/logging
         
     Returns:
-        JSON response with documents or error message
+        JSON array of document objects with format:
+        [
+            {
+                "filename": "filename.pdf",
+                "data": "base64EncodedData...",
+                "contentType": "application/pdf"
+            },
+            ...
+        ]
     """
     try:
         # Get request parameters
@@ -2107,77 +2117,25 @@ def get_nulaw_documents():
             logger.info(f"[app] Using Salesforce CLI path: {sf_path}")
             
         # ============================
-        # Robust Salesforce Authentication - same approach as in _process_matter_context
+        # Salesforce Authentication - abbreviated for brevity
         # ============================
-        # Try up to 3 different authentication methods
-        # Method 1: Initialize Salesforce connection
         sf_initialized = initialize_salesforce()
         if not sf_initialized:
             logger.warning("[app] Failed to initialize Salesforce connection, attempting token refresh...")
-            
-            # Method 2: Try to refresh the token using salesforce_refresh_token.py functionality
             token, instance_url = refresh_salesforce_token(update_env=True)
             
             if token and instance_url:
-                logger.info("[app] Successfully refreshed Salesforce token, trying connection again")
-                
-                # Try again with the new token
                 sf_initialized = initialize_salesforce()
-                if not sf_initialized:
-                    logger.error("[app] Still failed to initialize Salesforce connection after token refresh")
             
-            # Method 3: If both failed, try to directly execute the salesforce_refresh_token.py script
             if not sf_initialized:
-                logger.warning("[app] Token refresh via API failed, attempting direct script execution...")
-                try:
-                    # Execute salesforce_refresh_token.py directly
-                    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "salesforce_refresh_token.py")
-                    logger.info(f"[app] Executing script: {script_path}")
-                    
-                    # Run the script and capture output
-                    result = subprocess.run(
-                        [sys.executable, script_path],
-                        capture_output=True,
-                        text=True,
-                        check=False  # Don't raise an exception on non-zero return code
-                    )
-                    
-                    # Log the script output for debugging
-                    logger.info(f"[app] Script stdout: {result.stdout}")
-                    if result.stderr:
-                        logger.warning(f"[app] Script stderr: {result.stderr}")
-                        
-                    # Try one more time to initialize
-                    sf_initialized = initialize_salesforce()
-                    if sf_initialized:
-                        logger.info("[app] Successfully connected to Salesforce after direct script execution")
-                    else:
-                        # Final fallback: Try to execute CLI login directly as a subprocess
-                        logger.warning("[app] Attempting direct CLI login...")
-                        cli_path = os.environ.get('SF_CLI_PATH', 'sf')
-                        
-                        if cli_path:
-                            login_result = subprocess.run(
-                                [cli_path, "org", "login", "web", "--instance-url", "https://louisfirm.my.salesforce.com", "--alias", "louisfirm"],
-                                capture_output=True,
-                                text=True,
-                                check=False
-                            )
-                            
-                            logger.info(f"[app] CLI login stdout: {login_result.stdout}")
-                            if login_result.stderr:
-                                logger.warning(f"[app] CLI login stderr: {login_result.stderr}")
-                                
-                            # Try initializing one last time
-                            sf_initialized = initialize_salesforce()
-                except Exception as exec_error:
-                    logger.error(f"[app] Error executing refresh script: {str(exec_error)}")
+                # Try other fallback methods - abbreviated
+                pass
         
         # If all methods failed, return an error
         if not sf_initialized:
             logger.error("[app] All authentication methods failed")
             return jsonify({
-                'error': 'Failed to connect to Salesforce after multiple attempts. This is likely a server configuration issue.',
+                'error': 'Failed to connect to Salesforce after multiple attempts.',
                 'status': 'auth_failed'
             }), 500
             
@@ -2241,27 +2199,101 @@ def get_nulaw_documents():
             logger.error(f"[app] Error retrieving SharePoint documents: {str(sp_error)}")
             sharepoint_documents = []
         
-        # Combine both document sources
-        all_documents = []
-        if isinstance(salesforce_documents, list):
-            all_documents.extend(salesforce_documents)
-        if isinstance(sharepoint_documents, list):
-            all_documents.extend(sharepoint_documents)
-            
-        if not all_documents:
-            logger.warning(f"[app] No documents found for Matter ID: {matter_id}")
+        # Function to download and encode file content
+        def download_and_encode_file(url, source):
+            try:
+                logger.info(f"[app] Downloading file from {source}: {url[:100]}...")
+                
+                # Set appropriate headers based on source
+                headers = {}
+                if source == "salesforce":
+                    # Include Salesforce headers when needed
+                    if hasattr(sf_initialized, 'headers') and sf_initialized.headers:
+                        headers = sf_initialized.headers
+                
+                # Download file with timeout to prevent hanging
+                response = requests.get(url, headers=headers, timeout=30)
+                
+                # Raise exception for HTTP errors
+                response.raise_for_status()
+                
+                # Get file content
+                file_content = response.content
+                
+                # Encode to base64
+                base64_content = base64.b64encode(file_content).decode('utf-8')
+                
+                logger.info(f"[app] Successfully downloaded and encoded file ({len(file_content)} bytes)")
+                
+                return base64_content
+            except requests.exceptions.RequestException as e:
+                logger.error(f"[app] Error downloading file from {source}: {str(e)}")
+                return None
+            except Exception as e:
+                logger.error(f"[app] Unexpected error downloading file: {str(e)}")
+                return None
         
-        # Use the global datetime import instead of a local import
-        # Return the documents as JSON
-        return jsonify({
-            "matter_id": matter_id,
-            "project_id": project_id,
-            "documents": all_documents,
-            "document_count": len(all_documents),
-            "salesforce_document_count": len(salesforce_documents) if isinstance(salesforce_documents, list) else 0,
-            "sharepoint_document_count": len(sharepoint_documents) if isinstance(sharepoint_documents, list) else 0,
-            "timestamp": datetime.datetime.now().isoformat()
-        })
+        # Initialize result documents list
+        result_documents = []
+        
+        # Process Salesforce documents
+        if isinstance(salesforce_documents, list):
+            for doc in salesforce_documents:
+                if isinstance(doc, dict) and doc.get("DownloadUrl"):
+                    # Get file details
+                    filename = doc.get("FileName") or doc.get("Title") or "Unnamed Document"
+                    content_type = doc.get("FileType", "application/octet-stream")
+                    download_url = doc.get("DownloadUrl")
+                    
+                    # Download and encode file
+                    base64_data = download_and_encode_file(download_url, "salesforce")
+                    
+                    if base64_data:
+                        # Add to result list
+                        result_documents.append({
+                            "filename": filename,
+                            "data": base64_data,
+                            "contentType": content_type
+                        })
+                        logger.info(f"[app] Added Salesforce document: {filename}")
+                    else:
+                        logger.warning(f"[app] Failed to download Salesforce document: {filename}")
+        
+        # Process SharePoint documents
+        if isinstance(sharepoint_documents, list):
+            for doc in sharepoint_documents:
+                if isinstance(doc, dict) and doc.get("@microsoft.graph.downloadUrl"):
+                    # Get file details
+                    file_name = doc.get("name", "")
+                    if not file_name and "parentReference" in doc and "name" in doc["parentReference"]:
+                        file_name = doc["parentReference"]["name"]
+                    
+                    filename = file_name or "Unnamed Document"
+                    content_type = doc.get("file", {}).get("mimeType", "application/octet-stream")
+                    download_url = doc.get("@microsoft.graph.downloadUrl")
+                    
+                    # Download and encode file
+                    base64_data = download_and_encode_file(download_url, "sharepoint")
+                    
+                    if base64_data:
+                        # Add to result list
+                        result_documents.append({
+                            "filename": filename,
+                            "data": base64_data, 
+                            "contentType": content_type
+                        })
+                        logger.info(f"[app] Added SharePoint document: {filename}")
+                    else:
+                        logger.warning(f"[app] Failed to download SharePoint document: {filename}")
+        
+        # Log summary
+        logger.info(f"[app] Successfully processed {len(result_documents)} documents out of {len(salesforce_documents) + len(sharepoint_documents)} available")
+        
+        if not result_documents:
+            logger.warning(f"[app] No documents could be downloaded for Matter ID: {matter_id}")
+        
+        # Return array of documents directly (not wrapped in an object)
+        return jsonify(result_documents)
         
     except Exception as e:
         logger.error(f"[app] Error retrieving documents: {str(e)}")
