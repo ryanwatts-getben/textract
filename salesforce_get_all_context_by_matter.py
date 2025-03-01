@@ -1030,6 +1030,10 @@ def minify_context(data):
     """
     Remove null values from a nested dictionary or list.
     
+    This function removes:
+    - Python None values
+    - String "null" values
+    
     Args:
         data: Dictionary or list to minify
         
@@ -1040,10 +1044,10 @@ def minify_context(data):
         return {
             key: minify_context(value) 
             for key, value in data.items() 
-            if value is not None
+            if value is not None and value != "null"
         }
     elif isinstance(data, list):
-        return [minify_context(item) for item in data if item is not None]
+        return [minify_context(item) for item in data if item is not None and item != "null"]
     else:
         return data
 
