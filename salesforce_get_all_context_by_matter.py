@@ -3,11 +3,11 @@
 import os
 import requests
 import json
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 import datetime
 import argparse
 import sys
-from salesforce_refresh_token import get_salesforce_headers, refresh_salesforce_token, salesforce_request, verify_credentials
+from salesforce_refresh_token import get_salesforce_headers, refresh_salesforce_token, salesforce_request, verify_credentials, get_cli_credentials
 import time
 from share_point_get_documents import get_sharepoint_documents_for_matter
 
@@ -60,41 +60,162 @@ def set_salesforce_auth_globals(auth_headers, auth_instance_url):
         return False
 
 def initialize_salesforce():
-    """Initialize Salesforce connection and verify credentials.
+    """
+    Initialize the Salesforce connection using stored credentials.
     
     Returns:
-        bool: True if initialization was successful, False otherwise
+        bool: True if initialized successfully, False otherwise
     """
     global headers, SALESFORCE_INSTANCE_URL
     
-    print("[get_all_context] Initializing Salesforce connection...")
-    
-    # First verify Salesforce CLI credentials
-    cli_available = verify_credentials()
-    if not cli_available:
-        print("[get_all_context] ⚠️ Salesforce CLI credentials are not properly configured.")
-        print("\n[get_all_context] To fix this issue:")
-        print("  Option 1: Run the script with the --sf-path argument:")
-        print("    python get_all_context_by_matter.py --sf-path \"C:\\path\\to\\sf.cmd\"")
-        print("\n  Option 2: Set the SF_CLI_PATH environment variable:")
-        print("    In PowerShell: $env:SF_CLI_PATH = \"C:\\path\\to\\sf.cmd\"")
-        print("    In CMD: set SF_CLI_PATH=C:\\path\\to\\sf.cmd")
-        print("\n  Option 3: Find where sf is installed:")
-        print("    In PowerShell: where.exe sf")
-        print("    Then use that path with option 1 or 2")
+    try:
+        # If we already have headers and URL, we're already initialized
+        if headers and SALESFORCE_INSTANCE_URL:
+            print("[get_all_context] Already initialized with Salesforce credentials")
+            return True
+        
+        # Get access token from environment or .env file
+        load_dotenv()
+        
+        access_token = os.environ.get("SALESFORCE_ACCESS_TOKEN")
+        instance_url = os.environ.get("SALESFORCE_INSTANCE_URL")
+        
+        # If not found in environment, try to load from .env file directly
+        if not access_token or not instance_url:
+            print("[get_all_context] Salesforce credentials not found in environment, checking .env file directly")
+            try:
+                env_vars = dotenv_values()
+                if "SALESFORCE_ACCESS_TOKEN" in env_vars and "SALESFORCE_INSTANCE_URL" in env_vars:
+                    access_token = env_vars["SALESFORCE_ACCESS_TOKEN"]
+                    instance_url = env_vars["SALESFORCE_INSTANCE_URL"]
+                    print("[get_all_context] Found Salesforce credentials in .env file")
+            except Exception as e:
+                print(f"[get_all_context] Error reading .env file: {e}")
+        
+        # If we still don't have credentials, try to get them from the CLI
+        if not access_token or not instance_url:
+            print("[get_all_context] Salesforce credentials not found, attempting to get from CLI")
+            try:
+                # Use the refresh script to get credentials from CLI
+                token, url = get_cli_credentials()
+                
+                if token and url:
+                    access_token = token
+                    instance_url = url
+                    print(f"[get_all_context] Successfully retrieved token from CLI: {token[:10]}...")
+            except Exception as e:
+                print(f"[get_all_context] Error getting credentials from CLI: {e}")
+        
+        # If we still don't have credentials, try to refresh the token
+        if not access_token or not instance_url:
+            print("[get_all_context] No Salesforce credentials found, attempting to refresh token")
+            try:
+                # Use the refresh script to refresh the token
+                token, url = refresh_salesforce_token()
+                
+                if token and url:
+                    access_token = token
+                    instance_url = url
+                    print(f"[get_all_context] Successfully refreshed token: {token[:10]}...")
+                    
+                    # Update environment for future calls
+                    os.environ["SALESFORCE_ACCESS_TOKEN"] = token
+                    os.environ["SALESFORCE_INSTANCE_URL"] = url
+                    
+                    # Update .env file
+                    from salesforce_refresh_token import update_env_file
+                    update_env_file("SALESFORCE_ACCESS_TOKEN", token)
+                    update_env_file("SALESFORCE_INSTANCE_URL", url)
+            except Exception as e:
+                print(f"[get_all_context] Error refreshing token: {e}")
+        
+        # Validate that we have the required credentials
+        if not access_token:
+            print("[get_all_context] No Salesforce access token found")
+            return False
+        
+        if not instance_url:
+            print("[get_all_context] No Salesforce instance URL found")
+            return False
+        
+        # Initialize global variables
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+        SALESFORCE_INSTANCE_URL = instance_url.rstrip("/")  # Ensure no trailing slash
+        
+        # Test a simple API call to verify the token
+        try:
+            versions_url = f"{SALESFORCE_INSTANCE_URL}/services/data/"
+            response = requests.get(versions_url, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                print("[get_all_context] Successfully verified Salesforce connection")
+                
+                # Store credentials for other functions
+                set_salesforce_auth_globals(headers, SALESFORCE_INSTANCE_URL)
+                
+                return True
+            elif response.status_code == 401:
+                print("[get_all_context] Invalid Salesforce token (401 Unauthorized)")
+                
+                # Clear invalid token from environment
+                if 'SALESFORCE_ACCESS_TOKEN' in os.environ:
+                    os.environ.pop('SALESFORCE_ACCESS_TOKEN')
+                    print("[get_all_context] Cleared invalid token from environment")
+                
+                # Try refreshing the token once more
+                try:
+                    from salesforce_refresh_token import refresh_salesforce_token
+                    token, url = refresh_salesforce_token()
+                    
+                    if token and url:
+                        # Update headers with new token
+                        headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json"
+                        }
+                        SALESFORCE_INSTANCE_URL = url.rstrip("/")
+                        
+                        # Test the new token
+                        versions_url = f"{SALESFORCE_INSTANCE_URL}/services/data/"
+                        response = requests.get(versions_url, headers=headers, timeout=30)
+                        
+                        if response.status_code == 200:
+                            print("[get_all_context] Successfully verified Salesforce connection after token refresh")
+                            
+                            # Store credentials for other functions
+                            set_salesforce_auth_globals(headers, SALESFORCE_INSTANCE_URL)
+                            
+                            # Update environment
+                            os.environ["SALESFORCE_ACCESS_TOKEN"] = token
+                            os.environ["SALESFORCE_INSTANCE_URL"] = url
+                            
+                            # Update .env file
+                            from salesforce_refresh_token import update_env_file
+                            update_env_file("SALESFORCE_ACCESS_TOKEN", token)
+                            update_env_file("SALESFORCE_INSTANCE_URL", url)
+                            
+                            return True
+                        else:
+                            print(f"[get_all_context] Verification failed after token refresh with status: {response.status_code}")
+                            return False
+                    else:
+                        print("[get_all_context] Failed to refresh token")
+                        return False
+                except Exception as e:
+                    print(f"[get_all_context] Error during token refresh: {e}")
+                    return False
+            else:
+                print(f"[get_all_context] Salesforce verification failed with status: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"[get_all_context] Error verifying Salesforce connection: {e}")
+            return False
+    except Exception as e:
+        print(f"[get_all_context] Error initializing Salesforce: {e}")
         return False
-    
-    # Get Salesforce credentials and headers with token validation/refresh
-    headers, SALESFORCE_INSTANCE_URL = get_salesforce_headers()
-    
-    if not headers or not SALESFORCE_INSTANCE_URL:
-        print("[get_all_context] ❌ Failed to obtain Salesforce authentication.")
-        print("[get_all_context] Please ensure you are logged in with the Salesforce CLI:")
-        print("    sf org login web --instance-url https://louisfirm.my.salesforce.com --alias louisfirm")
-        return False
-    
-    print(f"[get_all_context] ✅ Successfully connected to Salesforce: {SALESFORCE_INSTANCE_URL}")
-    return True
 
 # Helper function to handle 401 errors with automatic token refresh
 def execute_salesforce_request(request_func, *args, **kwargs):
