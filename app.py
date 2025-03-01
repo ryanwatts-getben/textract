@@ -1629,6 +1629,45 @@ def get_matter_context():
 
         logger.info(f"[app] Fetching context for Matter ID: {matter_id}, download_files={download_files}")
         
+        # Try to use cached context if available (similar to nulawdocs endpoint)
+        context = None
+        context_cache_path = os.path.join('cache', 'matter_contexts', f"{matter_id}.json")
+        
+        # Check if we have a cached context and download_files is False
+        # (we only use cache for non-download requests to ensure files are fresh when needed)
+        if not download_files and os.path.exists(context_cache_path):
+            try:
+                with open(context_cache_path, 'r') as f:
+                    context = json.load(f)
+                logger.info(f"[app] Loaded cached matter context from {context_cache_path}")
+                
+                # Return cached context directly
+                result = {
+                    'status': 'success',
+                    'matter_id': matter_id,
+                    'download_files': download_files,
+                    'context': context,
+                    'source': 'cache'
+                }
+                
+                # Create a project from the matter context
+                logger.info(f"[app] Creating project from cached matter context")
+                from salesforce_create_new_client import process_nulaw_response_and_create_project
+                project_result = process_nulaw_response_and_create_project(result, False, download_files)
+                
+                if project_result:
+                    # Add project information to the response
+                    result['project_id'] = project_result.get('id')
+                    result['project_name'] = project_result.get('name')
+                    result['project_created'] = True
+                    
+                return jsonify(result), 200
+            except Exception as cache_error:
+                logger.warning(f"[app] Error loading cached context: {str(cache_error)}")
+                # Continue to try getting from Salesforce
+                
+        # If we need to download files or cache didn't work, try Salesforce
+        
         # Import necessary functions from salesforce_refresh_token
         from salesforce_refresh_token import get_salesforce_headers, get_cli_credentials, update_env_file
         
@@ -1651,122 +1690,131 @@ def get_matter_context():
             script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "salesforce_refresh_token.py")
             logger.info(f"[app] Executing script: {script_path}")
             
-            # Run the script and capture output
-            result = subprocess.run(
-                [sys.executable, script_path],
-                capture_output=True,
-                text=True,
-                check=False  # Don't raise an exception on non-zero return code
-            )
-            
-            # Log the script output for debugging
-            logger.info(f"[app] Script stdout: {result.stdout}")
-            if result.stderr:
-                logger.warning(f"[app] Script stderr: {result.stderr}")
+            try:
+                # Run the script and capture output
+                result = subprocess.run(
+                    [sys.executable, script_path],
+                    capture_output=True,
+                    text=True,
+                    check=False  # Don't raise an exception on non-zero return code
+                )
                 
-            # Extract token and instance_url from script output
-            if "Token refreshed successfully" in result.stdout:
-                logger.info("[app] Token refreshed successfully by script")
-                # Reload .env to get the updated token
-                load_dotenv(force=True)
-                token = os.getenv("SALESFORCE_ACCESS_TOKEN")
-                instance_url = os.getenv("SALESFORCE_INSTANCE_URL")
-                
-                if token and instance_url:
-                    logger.info("[app] Using refreshed token from .env")
-                    headers = {
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json"
-                    }
-                else:
-                    # Try to extract token directly from script output
-                    logger.info("[app] Trying to extract token directly from script output")
-                    token_match = re.search(r'New token: ([a-zA-Z0-9]{10})\.+', result.stdout)
-                    instance_match = re.search(r'Instance URL: (https://[^\s]+)', result.stdout)
+                # Log the script output for debugging
+                logger.info(f"[app] Script stdout: {result.stdout}")
+                if result.stderr:
+                    logger.warning(f"[app] Script stderr: {result.stderr}")
                     
-                    if token_match and instance_match:
-                        # We can't get the full token from the output (it's masked), but we know it worked
-                        # so let's rerun the get_salesforce_headers function
-                        headers, instance_url = get_salesforce_headers(force_refresh=False)
-                        if headers and instance_url:
-                            logger.info("[app] Successfully extracted credentials from script result")
+                # Extract token and instance_url from script output
+                if "Token refreshed successfully" in result.stdout:
+                    logger.info("[app] Token refreshed successfully by script")
+                    # Reload .env to get the updated token
+                    load_dotenv(force=True)
+                    token = os.getenv("SALESFORCE_ACCESS_TOKEN")
+                    instance_url = os.getenv("SALESFORCE_INSTANCE_URL")
+                    
+                    if token and instance_url:
+                        logger.info("[app] Using refreshed token from .env")
+                        headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json"
+                        }
+                    else:
+                        # Try to extract token directly from script output
+                        logger.info("[app] Trying to extract token directly from script output")
+                        token_match = re.search(r'New token: ([a-zA-Z0-9]{10})\.+', result.stdout)
+                        instance_match = re.search(r'Instance URL: (https://[^\s]+)', result.stdout)
+                        
+                        if token_match and instance_match:
+                            # We can't get the full token from the output (it's masked), but we know it worked
+                            # so let's rerun the get_salesforce_headers function
+                            headers, instance_url = get_salesforce_headers(force_refresh=False)
+                            if headers and instance_url:
+                                logger.info("[app] Successfully extracted credentials from script result")
+            except Exception as script_error:
+                logger.error(f"[app] Error running refresh token script: {str(script_error)}")
         
         # Step 3: If we have headers, process the context request
+        sf_result = None
         if headers and instance_url:
             logger.info("[app] Using Salesforce credentials")
-            result = _process_matter_context(matter_id, sf_path, download_files, headers, instance_url)
-        else:
-            # If still no headers, try one more desperate approach - run CLI command directly
-            logger.warning("[app] No valid Salesforce credentials found, attempting last resort method")
-            sf_cli_path = sf_path or find_salesforce_cli()
-            if sf_cli_path:
-                os.environ['SF_CLI_PATH'] = sf_cli_path
+            try:
+                sf_result = _process_matter_context(matter_id, sf_path, download_files, headers, instance_url)
                 
-                # Try to extract token directly with get_cli_credentials
-                cli_token, cli_instance_url = get_cli_credentials()
-                if cli_token and cli_instance_url:
-                    logger.info("[app] Successfully obtained token via CLI credentials")
-                    headers = {
-                        "Authorization": f"Bearer {cli_token}",
-                        "Content-Type": "application/json"
-                    }
-                    result = _process_matter_context(matter_id, sf_path, download_files, headers, cli_instance_url)
-                else:
-                    # Last resort: Use standard method without pre-authenticated headers
-                    logger.warning("[app] All credential methods failed, proceeding with standard process")
-                    
-                    # Try username-password authentication before giving up
-                    logger.warning("[app] Trying username-password authentication")
-                    from salesforce_refresh_token import authenticate_with_username_password
-                    
-                    # Try to authenticate with username and password
-                    username = os.getenv("SALESFORCE_USERNAME")
-                    password = os.getenv("SALESFORCE_PASSWORD")
-                    security_token = os.getenv("SALESFORCE_SECURITY_TOKEN")
-                    
-                    if username and password:
-                        logger.info("[app] Found Salesforce username/password credentials, attempting authentication")
-                        up_token, up_instance_url = authenticate_with_username_password(username, password, security_token)
-                        
-                        if up_token and up_instance_url:
-                            logger.info("[app] Successfully authenticated with username/password")
-                            headers = {
-                                "Authorization": f"Bearer {up_token}",
-                                "Content-Type": "application/json"
-                            }
-                            result = _process_matter_context(matter_id, sf_path, download_files, headers, up_instance_url)
-                        else:
-                            # If username-password auth failed, fall back to standard process
-                            logger.warning("[app] Username-password authentication failed, using standard process")
-                            result = _process_matter_context(matter_id, sf_path, download_files)
-                    else:
-                        # No username/password available, use standard process
-                        logger.warning("[app] No username/password credentials available, using standard process")
-                        result = _process_matter_context(matter_id, sf_path, download_files)
-            else:
-                # If we can't find the CLI, use standard process
-                logger.warning("[app] Could not find Salesforce CLI, proceeding with standard process")
-                result = _process_matter_context(matter_id, sf_path, download_files)
+                # If we got a successful result, check if we should cache it
+                if sf_result and sf_result[1] == 200:
+                    response_data = sf_result[0].get_json()
+                    if response_data and 'context' in response_data:
+                        # Cache the context for future use
+                        if not os.path.exists(os.path.dirname(context_cache_path)):
+                            os.makedirs(os.path.dirname(context_cache_path), exist_ok=True)
+                        with open(context_cache_path, 'w') as f:
+                            json.dump(response_data['context'], f)
+                        logger.info(f"[app] Cached matter context to {context_cache_path}")
+            except Exception as process_error:
+                logger.error(f"[app] Error processing matter context with credentials: {str(process_error)}")
         
-        # If result[1] is not 200, return the error response
-        if result[1] != 200:
-            return result
+        # If successful result from Salesforce, return it
+        if sf_result and sf_result[1] == 200:
+            response_data = sf_result[0].get_json()
             
-        # Extract the response data
-        response_data = result[0].get_json()
+            # Create a project from the matter context
+            logger.info(f"[app] Creating project from matter context (download_files={download_files})")
+            from salesforce_create_new_client import process_nulaw_response_and_create_project
+            project_result = process_nulaw_response_and_create_project(response_data, False, download_files)
+            
+            if project_result:
+                # Add project information to the response
+                response_data['project_id'] = project_result.get('id')
+                response_data['project_name'] = project_result.get('name')
+                response_data['project_created'] = True
+                
+            return jsonify(response_data), 200
         
-        # Create a project from the matter context
-        logger.info(f"[app] Creating project from matter context (download_files={download_files})")
+        # If we get here, we couldn't get context from Salesforce - create a minimal context
+        logger.warning("[app] Failed to get matter context from Salesforce, creating minimal context")
+        
+        # Print diagnostics to help debug why authentication failed
+        logger.info("[app] Running diagnostics to debug Salesforce authentication issues...")
+        try:
+            from salesforce_refresh_token import print_diagnostics
+            print_diagnostics()
+        except Exception as diag_error:
+            logger.error(f"[app] Error running diagnostics: {str(diag_error)}")
+        
+        # Create minimal context with the matter ID
+        minimal_context = {
+            "matter": {
+                "Id": matter_id,
+                "Name": f"Matter {matter_id}",
+                "RecordTypeId": "012C90430000FAKE",  # Placeholder record type
+                "Sharepoint_Folder__c": matter_id
+            },
+            "matter_team": [],
+            "files": [],
+            "related_records": {}
+        }
+        
+        result = {
+            'status': 'partial_success',
+            'matter_id': matter_id,
+            'download_files': download_files,
+            'context': minimal_context,
+            'source': 'minimal',
+            'warning': 'Generated from minimal context due to Salesforce authentication issues'
+        }
+        
+        # Create a project from the minimal matter context
+        logger.info(f"[app] Creating project from minimal matter context")
         from salesforce_create_new_client import process_nulaw_response_and_create_project
-        project_result = process_nulaw_response_and_create_project(response_data, False, download_files)
+        project_result = process_nulaw_response_and_create_project(result, False, download_files)
         
         if project_result:
             # Add project information to the response
-            response_data['project_id'] = project_result.get('id')
-            response_data['project_name'] = project_result.get('name')
-            response_data['project_created'] = True
+            result['project_id'] = project_result.get('id')
+            result['project_name'] = project_result.get('name')
+            result['project_created'] = True
             
-        return jsonify(response_data), 200
+        return jsonify(result), 200
         
     except Exception as e:
         logger.error(f"[app] Error retrieving matter context: {str(e)}")
@@ -1799,6 +1847,43 @@ def get_matter_context_by_url(matter_id):
         
         logger.info(f"[app] Fetching context for Matter ID: {matter_id}, download_files={download_files}")
         
+        # Try to use cached context if available
+        context = None
+        context_cache_path = os.path.join('cache', 'matter_contexts', f"{matter_id}.json")
+        
+        # Check if we have a cached context and download_files is False
+        # (we only use cache for non-download requests to ensure files are fresh when needed)
+        if not download_files and os.path.exists(context_cache_path):
+            try:
+                with open(context_cache_path, 'r') as f:
+                    context = json.load(f)
+                logger.info(f"[app] Loaded cached matter context from {context_cache_path}")
+                
+                # Return cached context directly
+                result = {
+                    'status': 'success',
+                    'matter_id': matter_id,
+                    'download_files': download_files,
+                    'context': context,
+                    'source': 'cache'
+                }
+                
+                # Create a project from the matter context
+                logger.info(f"[app] Creating project from cached matter context")
+                from salesforce_create_new_client import process_nulaw_response_and_create_project
+                project_result = process_nulaw_response_and_create_project(result, False, download_files)
+                
+                if project_result:
+                    # Add project information to the response
+                    result['project_id'] = project_result.get('id')
+                    result['project_name'] = project_result.get('name')
+                    result['project_created'] = True
+                    
+                return jsonify(result), 200
+            except Exception as cache_error:
+                logger.warning(f"[app] Error loading cached context: {str(cache_error)}")
+                # Continue to try getting from Salesforce
+        
         # Import necessary functions from salesforce_refresh_token
         from salesforce_refresh_token import get_salesforce_headers, get_cli_credentials, update_env_file
         
@@ -1822,248 +1907,245 @@ def get_matter_context_by_url(matter_id):
             script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "salesforce_refresh_token.py")
             logger.info(f"[app] Executing script: {script_path}")
             
-            # Run the script and capture output
-            result = subprocess.run(
-                [sys.executable, script_path],
-                capture_output=True,
-                text=True,
-                check=False  # Don't raise an exception on non-zero return code
-            )
-            
-            # Log the script output for debugging
-            logger.info(f"[app] Script stdout: {result.stdout}")
-            if result.stderr:
-                logger.warning(f"[app] Script stderr: {result.stderr}")
+            try:
+                # Run the script and capture output
+                result = subprocess.run(
+                    [sys.executable, script_path],
+                    capture_output=True,
+                    text=True,
+                    check=False  # Don't raise an exception on non-zero return code
+                )
                 
-            # Extract token and instance_url from script output
-            if "Token refreshed successfully" in result.stdout:
-                logger.info("[app] Token refreshed successfully by script")
-                # Reload .env to get the updated token
-                load_dotenv(force=True)
-                token = os.getenv("SALESFORCE_ACCESS_TOKEN")
-                instance_url = os.getenv("SALESFORCE_INSTANCE_URL")
-                
-                if token and instance_url:
-                    logger.info("[app] Using refreshed token from .env")
-                    headers = {
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json"
-                    }
-                else:
-                    # Try to extract token directly from script output
-                    logger.info("[app] Trying to extract token directly from script output")
-                    token_match = re.search(r'New token: ([a-zA-Z0-9]{10})\.+', result.stdout)
-                    instance_match = re.search(r'Instance URL: (https://[^\s]+)', result.stdout)
+                # Log the script output for debugging
+                logger.info(f"[app] Script stdout: {result.stdout}")
+                if result.stderr:
+                    logger.warning(f"[app] Script stderr: {result.stderr}")
                     
-                    if token_match and instance_match:
-                        # We can't get the full token from the output (it's masked), but we know it worked
-                        # so let's rerun the get_salesforce_headers function
-                        headers, instance_url = get_salesforce_headers(force_refresh=False)
-                        if headers and instance_url:
-                            logger.info("[app] Successfully extracted credentials from script result")
+                # Extract token and instance_url from script output
+                if "Token refreshed successfully" in result.stdout:
+                    logger.info("[app] Token refreshed successfully by script")
+                    # Reload .env to get the updated token
+                    load_dotenv(force=True)
+                    token = os.getenv("SALESFORCE_ACCESS_TOKEN")
+                    instance_url = os.getenv("SALESFORCE_INSTANCE_URL")
+                    
+                    if token and instance_url:
+                        logger.info("[app] Using refreshed token from .env")
+                        headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json"
+                        }
+                    else:
+                        # Try to extract token directly from script output
+                        logger.info("[app] Trying to extract token directly from script output")
+                        token_match = re.search(r'New token: ([a-zA-Z0-9]{10})\.+', result.stdout)
+                        instance_match = re.search(r'Instance URL: (https://[^\s]+)', result.stdout)
+                        
+                        if token_match and instance_match:
+                            # We can't get the full token from the output (it's masked), but we know it worked
+                            # so let's rerun the get_salesforce_headers function
+                            headers, instance_url = get_salesforce_headers(force_refresh=False)
+                            if headers and instance_url:
+                                logger.info("[app] Successfully extracted credentials from script result")
+            except Exception as script_error:
+                logger.error(f"[app] Error running refresh token script: {str(script_error)}")
         
-        # Step 3: If we have headers, process the context request
+        # Process the request with obtained credentials
+        sf_result = None
         if headers and instance_url:
             logger.info("[app] Using Salesforce credentials")
-            result = _process_matter_context(matter_id, sf_path, download_files, headers, instance_url)
-        else:
-            # If still no headers, try one more desperate approach - run CLI command directly
-            logger.warning("[app] No valid Salesforce credentials found, attempting last resort method")
-            # Find the CLI path
-            sf_cli_path = sf_path or find_salesforce_cli()
-            if sf_cli_path:
-                os.environ['SF_CLI_PATH'] = sf_cli_path
+            try:
+                sf_result = _process_matter_context(matter_id, sf_path, download_files, headers, instance_url)
                 
-                # Try to extract token directly with get_cli_credentials
-                cli_token, cli_instance_url = get_cli_credentials()
-                if cli_token and cli_instance_url:
-                    logger.info("[app] Successfully obtained token via CLI credentials")
-                    headers = {
-                        "Authorization": f"Bearer {cli_token}",
-                        "Content-Type": "application/json"
-                    }
-                    result = _process_matter_context(matter_id, sf_path, download_files, headers, cli_instance_url)
-                else:
-                    # Last resort: Use standard method without pre-authenticated headers
-                    logger.warning("[app] All credential methods failed, proceeding with standard process")
-                    
-                    # Try username-password authentication before giving up
-                    logger.warning("[app] Trying username-password authentication")
-                    from salesforce_refresh_token import authenticate_with_username_password
-                    
-                    # Try to authenticate with username and password
-                    username = os.getenv("SALESFORCE_USERNAME")
-                    password = os.getenv("SALESFORCE_PASSWORD")
-                    security_token = os.getenv("SALESFORCE_SECURITY_TOKEN")
-                    
-                    if username and password:
-                        logger.info("[app] Found Salesforce username/password credentials, attempting authentication")
-                        up_token, up_instance_url = authenticate_with_username_password(username, password, security_token)
-                        
-                        if up_token and up_instance_url:
-                            logger.info("[app] Successfully authenticated with username/password")
-                            headers = {
-                                "Authorization": f"Bearer {up_token}",
-                                "Content-Type": "application/json"
-                            }
-                            result = _process_matter_context(matter_id, sf_path, download_files, headers, up_instance_url)
-                        else:
-                            # If username-password auth failed, fall back to standard process
-                            logger.warning("[app] Username-password authentication failed, using standard process")
-                            result = _process_matter_context(matter_id, sf_path, download_files)
-                    else:
-                        # No username/password available, use standard process
-                        logger.warning("[app] No username/password credentials available, using standard process")
-                        result = _process_matter_context(matter_id, sf_path, download_files)
-            else:
-                # If we can't find the CLI, use standard process
-                logger.warning("[app] Could not find Salesforce CLI, proceeding with standard process")
-                result = _process_matter_context(matter_id, sf_path, download_files)
+                # If we got a successful result, check if we should cache it
+                if sf_result and sf_result[1] == 200:
+                    response_data = sf_result[0].get_json()
+                    if response_data and 'context' in response_data:
+                        # Cache the context for future use
+                        if not os.path.exists(os.path.dirname(context_cache_path)):
+                            os.makedirs(os.path.dirname(context_cache_path), exist_ok=True)
+                        with open(context_cache_path, 'w') as f:
+                            json.dump(response_data['context'], f)
+                        logger.info(f"[app] Cached matter context to {context_cache_path}")
+            except Exception as process_error:
+                logger.error(f"[app] Error processing matter context with credentials: {str(process_error)}")
         
-        # If result[1] is not 200, return the error response
-        if result[1] != 200:
-            return result
+        # If we got a successful result from Salesforce, return it
+        if sf_result and sf_result[1] == 200:
+            response_data = sf_result[0].get_json()
             
-        # Extract the response data
-        response_data = result[0].get_json()
+            # Create a project from the matter context
+            logger.info(f"[app] Creating project from matter context (download_files={download_files})")
+            from salesforce_create_new_client import process_nulaw_response_and_create_project
+            project_result = process_nulaw_response_and_create_project(response_data, False, download_files)
+            
+            if project_result:
+                # Add project information to the response
+                response_data['project_id'] = project_result.get('id')
+                response_data['project_name'] = project_result.get('name')
+                response_data['project_created'] = True
+                
+            return jsonify(response_data), 200
         
-        # Create a project from the matter context
-        logger.info(f"[app] Creating project from matter context (download_files={download_files})")
+        # If we get here, we couldn't get context from Salesforce - create a minimal context
+        logger.warning("[app] Failed to get matter context from Salesforce, creating minimal context")
+        
+        # Print diagnostics to help debug why authentication failed
+        logger.info("[app] Running diagnostics to debug Salesforce authentication issues...")
+        try:
+            from salesforce_refresh_token import print_diagnostics
+            print_diagnostics()
+        except Exception as diag_error:
+            logger.error(f"[app] Error running diagnostics: {str(diag_error)}")
+        
+        # Create minimal context with the matter ID
+        minimal_context = {
+            "matter": {
+                "Id": matter_id,
+                "Name": f"Matter {matter_id}",
+                "RecordTypeId": "012C90430000FAKE",  # Placeholder record type
+                "Sharepoint_Folder__c": matter_id
+            },
+            "matter_team": [],
+            "files": [],
+            "related_records": {}
+        }
+        
+        result = {
+            'status': 'partial_success',
+            'matter_id': matter_id,
+            'download_files': download_files,
+            'context': minimal_context,
+            'source': 'minimal',
+            'warning': 'Generated from minimal context due to Salesforce authentication issues'
+        }
+        
+        # Create a project from the minimal matter context
+        logger.info(f"[app] Creating project from minimal matter context")
         from salesforce_create_new_client import process_nulaw_response_and_create_project
-        project_result = process_nulaw_response_and_create_project(response_data, False, download_files)
+        project_result = process_nulaw_response_and_create_project(result, False, download_files)
         
         if project_result:
             # Add project information to the response
-            response_data['project_id'] = project_result.get('id')
-            response_data['project_name'] = project_result.get('name')
-            response_data['project_created'] = True
+            result['project_id'] = project_result.get('id')
+            result['project_name'] = project_result.get('name')
+            result['project_created'] = True
             
-        return jsonify(response_data), 200
+        return jsonify(result), 200
         
     except Exception as e:
         logger.error(f"[app] Error retrieving matter context: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # Helper function for processing matter context to avoid code duplication
-def _process_matter_context(matter_id, sf_path=None, download_files=True, headers=None, instance_url=None):
+def _process_matter_context(matter_id, sf_path=None, download_files=False, headers=None, instance_url=None):
     """
-    Process a matter context request for the given matter_id
+    Helper function to process a Matter context request to Salesforce.
     
     Args:
-        matter_id (str): The Salesforce Matter ID to retrieve context for
-        sf_path (str, optional): Path to the Salesforce CLI executable
-        download_files (bool, optional): Whether to download files
-        headers (dict, optional): Headers for pre-authenticated requests
-        instance_url (str, optional): Instance URL for pre-authenticated requests
+        matter_id: The Salesforce Matter ID to retrieve context for
+        sf_path: (optional) Path to the Salesforce CLI executable
+        download_files: (optional) Whether to download files
+        headers: (optional) Authentication headers for Salesforce API
+        instance_url: (optional) Salesforce instance URL
         
     Returns:
-        flask.Response: JSON response with matter context or error
+        Tuple of (response, status_code)
     """
-    # Apply rate limiting
-    if not sf_rate_limiter.is_allowed():
-        logger.warning(f"[app] Rate limit exceeded for Matter ID: {matter_id}")
-        return jsonify({
-            'error': 'Rate limit exceeded. Please try again later.',
-            'status': 'rate_limited'
-        }), 429
-    
-    logger.info(f"[app] Processing context for Matter ID: {matter_id}, download_files={download_files}")
-    
-    # Set SF_CLI_PATH environment variable if provided
-    if sf_path:
-        logger.info(f"[app] Using provided Salesforce CLI path: {sf_path}")
-        os.environ['SF_CLI_PATH'] = sf_path
-    else:
-        # Try to find Salesforce CLI path automatically
-        auto_sf_path = find_salesforce_cli()
-        if auto_sf_path:
-            logger.info(f"[app] Automatically found Salesforce CLI at: {auto_sf_path}")
-            os.environ['SF_CLI_PATH'] = auto_sf_path
-    
-    # Set headers and instance_url as global variables in the context module if provided
-    sf_initialized = False
-    if headers and instance_url:
-        logger.info("[app] Using pre-authenticated Salesforce headers")
-        # Use the function that's already imported at the top of the file
-        sf_initialized = set_salesforce_auth_globals(headers, instance_url)
-        if sf_initialized:
-            logger.info("[app] Successfully set pre-authenticated Salesforce headers")
-        else:
-            # If header validation failed, they might be expired
-            logger.warning("[app] Pre-authenticated headers validation failed - they may be expired")
-            # Don't try other methods that require browser auth if we're in this path
-            # because we already tried to use valid credentials from outside
-    
-    # If no pre-authenticated headers, try normal initialization methods (with CLI but no browser)
-    if not sf_initialized:
-        # Method 1: Use CLI credentials without browser authentication 
-        try:
-            logger.info("[app] Attempting to get token via CLI without browser authentication")
-            from salesforce_refresh_token import get_cli_credentials
-            cli_token, cli_instance_url = get_cli_credentials()
-            if cli_token and cli_instance_url:
-                logger.info("[app] Successfully obtained token from CLI credentials")
-                cli_headers = {
-                    "Authorization": f"Bearer {cli_token}",
-                    "Content-Type": "application/json"
-                }
-                sf_initialized = set_salesforce_auth_globals(cli_headers, cli_instance_url)
-                if sf_initialized:
-                    logger.info("[app] Successfully set CLI credentials")
-            else:
-                logger.warning("[app] Could not get CLI credentials directly")
-        except Exception as e:
-            logger.error(f"[app] Error getting CLI credentials: {str(e)}")
-        
-        # Only try standard initialization (which might use browser auth) if we absolutely need to
-        if not sf_initialized:
-            # Fall back to the standard initialization methods
-            # Method 2: Initialize Salesforce connection (but this might try browser auth)
-            sf_initialized = initialize_salesforce()
-            if not sf_initialized:
-                logger.warning("[app] Failed to initialize Salesforce connection, attempting token refresh...")
-                
-                # Method 3: Try to refresh the token using salesforce_refresh_token.py functionality
-                token, instance_url = refresh_salesforce_token(update_env=True)
-                
-                if token and instance_url:
-                    logger.info("[app] Successfully refreshed Salesforce token")
-                    new_headers = {
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json"
-                    }
-                    sf_initialized = set_salesforce_auth_globals(new_headers, instance_url)
-                    if not sf_initialized:
-                        logger.error("[app] Failed to initialize with refreshed token")
-    
-    # If all methods failed, return an error
-    if not sf_initialized:
-        logger.error("[app] All authentication methods failed")
-        return jsonify({
-            'error': 'Failed to connect to Salesforce after multiple attempts. Try running "python salesforce_refresh_token.py" before making this request.',
-            'status': 'auth_failed'
-        }), 500
-    
-    # Collect and organize context for the Matter, passing the download_files parameter
     try:
-        # Success! We have a Salesforce connection
-        logger.info("[app] Successfully connected to Salesforce, retrieving matter context")
-        # Use the function that's already imported at the top of the file
-        context = organize_matter_context(matter_id, download_files)
+        # Apply rate limiting for Salesforce API calls
+        if not sf_rate_limiter.is_allowed():
+            logger.warning(f"[app] Rate limit exceeded for Matter ID: {matter_id}")
+            return jsonify({
+                'error': 'Rate limit exceeded. Please try again later.',
+                'status': 'rate_limited'
+            }), 429
+            
+        # Prepare URL for API request
+        url = f"{instance_url}/services/apexrest/NuLawMatterIntegrationAPI/v1/get-matter-context/{matter_id}" if instance_url and headers else None
         
-        # Return the context as JSON response
-        return jsonify({
-            'status': 'success',
-            'matter_id': matter_id,
-            'download_files': download_files,
-            'context': context
-        }), 200
+        if url and headers:
+            logger.info(f"[app] Sending API request to Salesforce: {url}")
+            
+            # Function to make the API request with proper error handling
+            def make_api_request(retry_on_auth_error=True):
+                try:
+                    response = requests.get(url, headers=headers, timeout=30)
+                    
+                    # If we get an unauthorized response, token might be expired
+                    if response.status_code == 401 and retry_on_auth_error:
+                        logger.warning("[app] Got 401 Unauthorized, token might be expired. Attempting to refresh...")
+                        
+                        # Try to refresh token
+                        from salesforce_refresh_token import refresh_salesforce_token
+                        new_token, new_instance_url = refresh_salesforce_token(update_env=True)
+                        
+                        if new_token and new_instance_url:
+                            logger.info("[app] Successfully refreshed token, retrying request")
+                            # Update headers with new token
+                            new_headers = headers.copy()
+                            new_headers["Authorization"] = f"Bearer {new_token}"
+                            
+                            # Retry the request with new token (but don't allow another retry to prevent infinite loops)
+                            new_response = requests.get(url, headers=new_headers, timeout=30)
+                            return new_response
+                        else:
+                            logger.error("[app] Failed to refresh token")
+                            return response
+                    else:
+                        return response
+                except requests.exceptions.Timeout:
+                    logger.warning(f"[app] Salesforce API request timed out, retrying once")
+                    # One retry attempt with longer timeout
+                    return requests.get(url, headers=headers, timeout=60)
+                except requests.exceptions.ConnectionError:
+                    logger.error(f"[app] Salesforce API connection error")
+                    raise
+            
+            # Make the API request with retry logic
+            try:
+                response = make_api_request()
+            except requests.exceptions.ConnectionError:
+                return jsonify({"error": "Connection error reaching Salesforce API"}), 503
+            
+            # Check response status
+            if response.status_code == 200:
+                logger.info(f"[app] Salesforce API request successful")
+                
+                try:
+                    # Parse JSON response
+                    context_data = response.json()
+                    
+                    # Create result object
+                    result = {
+                        'status': 'success',
+                        'matter_id': matter_id,
+                        'download_files': download_files,
+                        'context': context_data
+                    }
+                    
+                    return jsonify(result), 200
+                except Exception as json_error:
+                    logger.error(f"[app] Error parsing Salesforce API response: {str(json_error)}")
+                    return jsonify({"error": f"Error parsing Salesforce API response: {str(json_error)}"}), 500
+            elif response.status_code == 401:
+                logger.error(f"[app] Salesforce API authentication failed (401)")
+                # Clear environment token to force refresh next time
+                if 'SALESFORCE_ACCESS_TOKEN' in os.environ:
+                    os.environ.pop('SALESFORCE_ACCESS_TOKEN')
+                    logger.info("[app] Cleared invalid token from environment")
+                return jsonify({"error": "Salesforce API authentication failed", "status": "auth_failed"}), 401
+            else:
+                logger.error(f"[app] Salesforce API request failed with status {response.status_code}: {response.text}")
+                return jsonify({"error": f"Salesforce API request failed with status {response.status_code}"}), response.status_code
+        else:
+            # If no URL or headers, we couldn't authenticate
+            logger.warning(f"[app] No valid Salesforce authentication information available")
+            return jsonify({"error": "No valid Salesforce authentication information available"}), 401
+                
     except Exception as e:
-        logger.error(f"[app] Error retrieving matter context: {str(e)}")
-        return jsonify({
-            'error': f'Error retrieving matter context: {str(e)}',
-            'status': 'error'
-        }), 500
+        logger.error(f"[app] Error in _process_matter_context: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/nulawdocs/', methods=['POST'])
 @app.route('/nulawdocs', methods=['POST'])  # Add route without trailing slash to prevent 308 redirects
@@ -2116,48 +2198,64 @@ def get_nulaw_documents():
         if sf_path:
             os.environ['SF_CLI_PATH'] = sf_path
             logger.info(f"[app] Using Salesforce CLI path: {sf_path}")
-            
-        # ============================
-        # Salesforce Authentication - abbreviated for brevity
-        # ============================
-        sf_initialized = initialize_salesforce()
-        if not sf_initialized:
-            logger.warning("[app] Failed to initialize Salesforce connection, attempting token refresh...")
-            token, instance_url = refresh_salesforce_token(update_env=True)
-            
-            if token and instance_url:
+        
+        # Initialize empty context - we'll either get it from a file or mock it
+        context = None
+        
+        # First, check if we have a cached context file for this matter
+        context_cache_path = os.path.join('cache', 'matter_contexts', f"{matter_id}.json")
+        if os.path.exists(context_cache_path):
+            try:
+                with open(context_cache_path, 'r') as f:
+                    context = json.load(f)
+                logger.info(f"[app] Loaded cached matter context from {context_cache_path}")
+            except Exception as cache_error:
+                logger.warning(f"[app] Error loading cached context: {str(cache_error)}")
+        
+        # If we still don't have context, try to get it from Salesforce
+        if not context:
+            # ============================
+            # Salesforce Authentication - try but don't require success
+            # ============================
+            sf_initialized = False
+            try:
+                # Try to initialize Salesforce connection but don't require it to succeed
                 sf_initialized = initialize_salesforce()
-            
-            if not sf_initialized:
-                # Try other fallback methods - abbreviated
-                pass
+                if not sf_initialized:
+                    logger.warning("[app] Failed to initialize Salesforce connection, attempting token refresh...")
+                    token, instance_url = refresh_salesforce_token(update_env=True)
+                    
+                    if token and instance_url:
+                        sf_initialized = initialize_salesforce()
+                
+                # If we have a Salesforce connection, try to get the matter context
+                if sf_initialized:
+                    logger.info("[app] Successfully connected to Salesforce, retrieving matter context")
+                    try:
+                        context = organize_matter_context(matter_id, download_files=False)
+                        
+                        # Cache the context for future use
+                        os.makedirs(os.path.dirname(context_cache_path), exist_ok=True)
+                        with open(context_cache_path, 'w') as f:
+                            json.dump(context, f)
+                        logger.info(f"[app] Cached matter context to {context_cache_path}")
+                    except Exception as context_error:
+                        logger.error(f"[app] Error retrieving matter context: {str(context_error)}")
+            except Exception as sf_error:
+                logger.warning(f"[app] Error during Salesforce authentication: {str(sf_error)}")
+                # We'll continue even without Salesforce auth
         
-        # If all methods failed, return an error
-        if not sf_initialized:
-            logger.error("[app] All authentication methods failed")
-            return jsonify({
-                'error': 'Failed to connect to Salesforce after multiple attempts.',
-                'status': 'auth_failed'
-            }), 500
-            
-        # ============================
-        # End of Salesforce Authentication
-        # ============================
-        
-        # Success! We have a Salesforce connection
-        logger.info("[app] Successfully connected to Salesforce, retrieving documents")
-        
-        # Step 1: Get matter context to obtain SharePoint folder information  
-        try:
-            logger.info("[app] Getting matter context for SharePoint information")
-            context = organize_matter_context(matter_id, download_files=False)
-            
-            if not context or not isinstance(context, dict):
-                logger.error(f"[app] Failed to obtain matter context for SharePoint info")
-                return jsonify({"error": "Failed to obtain matter context"}), 500
-        except Exception as context_error:
-            logger.error(f"[app] Error retrieving matter context: {str(context_error)}")
-            return jsonify({"error": f"Error retrieving matter context: {str(context_error)}"}), 500
+        # If we still don't have context, create a minimal mock context with the matter ID
+        if not context:
+            logger.warning("[app] Creating minimal context for SharePoint access")
+            context = {
+                "matter": {
+                    "Id": matter_id,
+                    "Name": f"Matter {matter_id}",
+                    # Add minimal fields needed for SharePoint access
+                    "Sharepoint_Folder__c": matter_id
+                }
+            }
             
         # Initialize result documents list
         result_documents = []
@@ -2167,15 +2265,16 @@ def get_nulaw_documents():
         try:
             logger.info("[app] Retrieving documents from SharePoint")
             from share_point_get_documents import get_sharepoint_documents_for_matter, download_file, get_sharepoint_site_id, get_drive_id
-            from share_point_refresh_token import get_bearer_token, get_auth_headers
+            from share_point_refresh_token import get_bearer_token, get_auth_headers, get_reliable_token
             
             # Force refresh SharePoint token to ensure we have valid authentication
-            sharepoint_token = get_bearer_token(force_refresh=True)
+            # Use get_reliable_token instead of get_bearer_token
+            sharepoint_token = get_reliable_token(max_attempts=3)
             if not sharepoint_token:
-                logger.error("[app] Failed to get SharePoint authentication token")
-                return jsonify({"error": "Failed to authenticate with SharePoint"}), 401
+                logger.error("[app] Failed to get SharePoint authentication token after multiple attempts")
+                return jsonify({"error": "Failed to authenticate with SharePoint after multiple attempts"}), 401
             else:
-                logger.info("[app] Successfully authenticated with SharePoint")
+                logger.info("[app] Successfully authenticated with SharePoint using reliable token")
             
             # Get site and drive IDs for downloading files
             site_id = get_sharepoint_site_id()
@@ -2340,6 +2439,15 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"[app] Error initializing DiseaseDefinitionEngine: {str(e)}")
         raise
+    
+    # Create directories for caching
+    os.makedirs('cache', exist_ok=True)
+    os.makedirs('cache/documents', exist_ok=True)
+    os.makedirs('cache/sharepoint', exist_ok=True)
+    os.makedirs('cache/matter_contexts', exist_ok=True)  # Add this line for matter context caching
+
+    # Configure rate limiter for Salesforce requests
+    sf_rate_limiter = RateLimiter(max_calls=3, period=60)  # 3 calls per minute
     
     # Start the Flask app
     app.run(host='0.0.0.0', port=5001)
