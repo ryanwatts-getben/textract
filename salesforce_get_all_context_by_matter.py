@@ -21,6 +21,8 @@ load_dotenv()
 headers = None
 SALESFORCE_INSTANCE_URL = None
 
+# Note: Removed _insurance_metadata_cache global variable as it's no longer needed
+
 def set_salesforce_auth_globals(auth_headers, auth_instance_url):
     """
     Set global authentication headers and instance URL directly.
@@ -940,105 +942,19 @@ def get_insurance_information(matter_id):
         matter_id (str): The Salesforce Matter ID
         
     Returns:
-        dict: Dictionary containing insurance records and metadata
+        dict: Dictionary containing insurance records
     """
     print(f"[get_all_context] Retrieving insurance information for Matter ID: {matter_id}")
     
     insurance_data = {
-        "records": [],
-        "metadata": {},
-        "categories": {
-            "policy_information": [],
-            "claim_information": [],
-            "vehicle_information": [],
-            "financial_information": [],
-            "process_tracking": [],
-            "case_management": [],
-            "personal_injury_specific": []
-        }
+        "records": []
     }
     
-    # Use the cached metadata if available to avoid an API call
-    global _insurance_metadata_cache
-    if not globals().get('_insurance_metadata_cache'):
-        globals()['_insurance_metadata_cache'] = None
-    
-    try:
-        # 1. Get metadata about the Insurance object (use cache if available)
-        if not _insurance_metadata_cache:
-            print("[get_all_context] Fetching Insurance object metadata (first time)...")
-            result = salesforce_request('get', '/services/data/v63.0/sobjects/nu_law__Insurance__c/describe')
-            
-            if result:
-                _insurance_metadata_cache = result
-                print("[get_all_context] Successfully cached Insurance metadata")
-            else:
-                print("[get_all_context] Error retrieving Insurance metadata")
-                _insurance_metadata_cache = None
-        else:
-            print("[get_all_context] Using cached Insurance object metadata")
-        
-        if _insurance_metadata_cache:
-            insurance_metadata = _insurance_metadata_cache
-            insurance_data["metadata"] = {
-                "label": insurance_metadata.get("label"),
-                "name": insurance_metadata.get("name"),
-                "custom": insurance_metadata.get("custom"),
-                "record_types": [rt.get("name") for rt in insurance_metadata.get("recordTypeInfos", [])]
-            }
-            
-            # Extract field information and categorize
-            fields = insurance_metadata.get("fields", [])
-            
-            # Define field categories according to documentation
-            field_category_keywords = {
-                "policy_information": ["policy", "type", "state", "limit"],
-                "claim_information": ["claim", "adjuster", "liability"],
-                "vehicle_information": ["vehicle", "vin", "license", "make", "model"],
-                "financial_information": ["premium", "medpay", "settlement", "cost", "proceed", "paid", "amount"],
-                "process_tracking": ["application", "receipt", "kpi", "pending", "day"],
-                "case_management": ["matter", "defendant", "settlement"],
-                "personal_injury_specific": ["pip", "wage", "medical", "statute"]
-            }
-            
-            # Categorize fields
-            all_fields = []
-            
-            for field in fields:
-                field_name = field.get("name")
-                
-                # Skip relationship fields ending with _r
-                if field_name.endswith("__r"):
-                    continue
-                    
-                field_info = {
-                    "name": field_name,
-                    "label": field.get("label"),
-                    "type": field.get("type"),
-                    "length": field.get("length"),
-                    "custom": field.get("custom")
-                }
-                all_fields.append(field_info)
-                
-                # Categorize field
-                field_name_lower = field_name.lower()
-                for category, keywords in field_category_keywords.items():
-                    if any(keyword in field_name_lower for keyword in keywords):
-                        insurance_data["categories"][category].append(field_info)
-                        break
-            
-            print(f"[get_all_context] Found {len(all_fields)} fields on the Insurance object")
-            insurance_data["fields"] = all_fields
-    
-    except Exception as e:
-        print(f"[get_all_context] Error retrieving Insurance metadata: {e}")
-    
-    # 2. Query insurance records using nu_law__Matter_Link__c field (hardcoded as requested)
-    # Using the comprehensive field list provided by user
+    # Query insurance records using nu_law__Matter_Link__c field
     try:
         print(f"[get_all_context] Querying insurance records using nu_law__Matter_Link__c...")
         
-        # Use the comprehensive field list provided by the user, excluding any fields ending with __r
+        # Use a more focused field list
         insurance_fields = [
             "Id", "Name", "CreatedDate", "LastModifiedDate", 
             "nu_law__Insurance_Carrier__c", "nu_law__Insurance_External_ID__c", 
@@ -1051,10 +967,7 @@ def get_insurance_information(matter_id):
             "MedPay__c", "Adjuster_Name__c", "Adjuster_Phone__c", "Adjuster_Email__c"
         ]
         
-        # We'll use a smaller set of fields to avoid exceeding query limits
-        # The complete field list caused issues in the past
-        
-        # Split into chunks of 100 fields to avoid exceeding SOQL query length limits
+        # Split into chunks of 20 fields to avoid exceeding SOQL query length limits
         field_chunks = [insurance_fields[i:i+20] for i in range(0, len(insurance_fields), 20)]
         
         # Build queries for each chunk
