@@ -6,8 +6,11 @@ import json
 import subprocess
 import sys
 import shutil
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 import time
+
+# Load environment variables from .env file at the start
+load_dotenv()
 
 # Allow configuring the CLI path through env var or directly in the script
 SF_CLI_PATH = os.getenv("SF_CLI_PATH", "sf")  # Default to "sf" command
@@ -30,63 +33,143 @@ def find_sf_cli():
     
     # First check if the current SF_CLI_PATH works
     if shutil.which(SF_CLI_PATH):
+        print(f"[salesforce_refresh] Verified CLI path exists: {SF_CLI_PATH}")
         return SF_CLI_PATH
     
     # Determine platform
     is_windows = sys.platform.startswith('win')
+    print(f"[salesforce_refresh] Detected platform: {'Windows' if is_windows else 'Unix/Linux'}")
     
-    # Try to find sf in common locations
-    possible_paths = ["sf"]  # Default PATH for all platforms
+    # Check common executable names first
+    cli_names = ['sf', 'sfdx']
+    if is_windows:
+        # On Windows, check both .cmd and .exe extensions
+        cli_names = ['sf.cmd', 'sf.exe', 'sf', 'sfdx.cmd', 'sfdx.exe', 'sfdx']
+    
+    # First try the PATH environment for these executable names
+    for name in cli_names:
+        cli_path = shutil.which(name)
+        if cli_path:
+            print(f"[salesforce_refresh] Found CLI in PATH: {cli_path}")
+            SF_CLI_PATH = cli_path
+            return cli_path
+    
+    # If not found in PATH, search common installation locations
+    possible_paths = []
     
     if is_windows:
         # Windows-specific paths
-        windows_paths = [
-            "sf.cmd",                            # Windows cmd wrapper
-            "sf.exe",                            # Windows executable
-            os.path.expanduser("~/AppData/Local/sf/bin/sf.exe"),  # Windows install location
-            os.path.expanduser("~/AppData/Roaming/npm/sf.cmd"),   # npm Windows location
-            "C:\\Program Files\\sfdx\\bin\\sf.exe",  # Possible install location
-            os.path.join(sys.prefix, "Scripts", "sf.exe"),  # Python venv location
+        npm_paths = [
+            os.path.expanduser("~\\AppData\\Roaming\\npm\\sf.cmd"),
+            os.path.expanduser("~\\AppData\\Roaming\\npm\\sfdx.cmd"),
+            "C:\\Program Files\\sfdx\\bin\\sf.cmd",
+            "C:\\Program Files\\sfdx\\bin\\sf.exe",
+            os.path.expanduser("~\\AppData\\Local\\sfdx\\bin\\sf.cmd"),
+            os.path.expanduser("~\\AppData\\Local\\sfdx\\bin\\sf.exe"),
+            os.path.expanduser("~\\AppData\\Local\\sf\\bin\\sf.cmd"),
+            os.path.expanduser("~\\AppData\\Local\\sf\\bin\\sf.exe"),
+            # Node modules paths
+            os.path.expanduser("~\\AppData\\Roaming\\npm\\node_modules\\@salesforce\\cli\\bin\\sf.js"),
+            os.path.expanduser("~\\AppData\\Roaming\\npm\\node_modules\\sfdx-cli\\bin\\sfdx.js")
         ]
-        possible_paths.extend(windows_paths)
+        possible_paths.extend(npm_paths)
     else:
-        # Linux/Mac-specific paths
+        # Unix/Linux paths
         unix_paths = [
-            os.path.expanduser("~/.npm/bin/sf"),        # npm global install location
-            "/usr/local/bin/sf",                        # Common location on Unix
-            "/usr/bin/sf",                              # Another common location on Unix
-            os.path.expanduser("~/.local/bin/sf"),      # User-specific bin directory
-            os.path.join(sys.prefix, "bin", "sf"),      # Python venv location for Unix
+            "/usr/local/bin/sf",
+            "/usr/bin/sf",
+            "/usr/local/bin/sfdx",
+            "/usr/bin/sfdx",
+            os.path.expanduser("~/.npm-global/bin/sf"),
+            os.path.expanduser("~/.npm-global/bin/sfdx"),
+            # Node.js paths on Unix
+            os.path.expanduser("~/.npm-global/lib/node_modules/@salesforce/cli/bin/sf.js"),
+            os.path.expanduser("~/.npm-global/lib/node_modules/sfdx-cli/bin/sfdx.js")
         ]
         possible_paths.extend(unix_paths)
     
-    # Add common npm global install (works on both platforms)
-    possible_paths.append(os.path.expanduser("~/.npm/sf"))
-    
-    # Check each possible path
+    # Check each location
     for path in possible_paths:
-        sf_resolved = shutil.which(path)
-        if sf_resolved:
-            SF_CLI_PATH = sf_resolved
-            return sf_resolved
+        if os.path.exists(path):
+            print(f"[salesforce_refresh] Found CLI at: {path}")
+            SF_CLI_PATH = path
+            return path
     
-    # If we can't find it automatically, try platform-specific commands
+    # If not found through direct paths, try running commands to locate it
     try:
         if is_windows:
-            # Windows uses 'where'
-            result = subprocess.run(['where', 'sf'], capture_output=True, text=True)
+            print("[salesforce_refresh] Trying to locate CLI using Windows commands...")
+            # Try with PowerShell first (more reliable)
+            try:
+                result = subprocess.run(
+                    ['powershell', '-Command', "Get-Command sf.cmd -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path"],
+                    capture_output=True, text=True, timeout=10
+                )
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    sf_path = result.stdout.strip()
+                    print(f"[salesforce_refresh] PowerShell found CLI at: {sf_path}")
+                    if os.path.exists(sf_path):
+                        SF_CLI_PATH = sf_path
+                        return sf_path
+            except Exception as ps_error:
+                print(f"[salesforce_refresh] PowerShell command failed: {ps_error}")
+                
+            # Fall back to CMD where command
+            for cmd_name in ['sf.cmd', 'sf.exe', 'sfdx.cmd', 'sfdx.exe']:
+                try:
+                    result = subprocess.run(
+                        ['where', cmd_name], 
+                        capture_output=True, text=True, timeout=10
+                    )
+                    
+                    if result.returncode == 0:
+                        # Take the first path found
+                        sf_path = result.stdout.strip().split('\n')[0]
+                        print(f"[salesforce_refresh] CMD found CLI at: {sf_path}")
+                        if os.path.exists(sf_path):
+                            SF_CLI_PATH = sf_path
+                            return sf_path
+                except Exception as cmd_error:
+                    print(f"[salesforce_refresh] CMD 'where {cmd_name}' failed: {cmd_error}")
+                    
+            # Last resort: try to find Node.js and run with node directly
+            try:
+                node_path = shutil.which('node')
+                if node_path:
+                    print(f"[salesforce_refresh] Found Node.js at: {node_path}")
+                    # Common paths for salesforce CLI JavaScript files
+                    js_paths = [
+                        os.path.expanduser("~\\AppData\\Roaming\\npm\\node_modules\\@salesforce\\cli\\bin\\sf.js"),
+                        os.path.expanduser("~\\AppData\\Roaming\\npm\\node_modules\\sfdx-cli\\bin\\sfdx.js")
+                    ]
+                    
+                    for js_path in js_paths:
+                        if os.path.exists(js_path):
+                            print(f"[salesforce_refresh] Found CLI JS file at: {js_path}")
+                            # Use node to run the JS file directly
+                            SF_CLI_PATH = f"{node_path} {js_path}"
+                            return SF_CLI_PATH
+            except Exception as node_error:
+                print(f"[salesforce_refresh] Error checking for Node.js: {node_error}")
+                
         else:
-            # Linux/Mac uses 'which'
-            result = subprocess.run(['which', 'sf'], capture_output=True, text=True)
-            
-        if result.returncode == 0:
-            sf_path = result.stdout.strip().split('\n')[0]  # Take first match
-            if os.path.exists(sf_path):
-                SF_CLI_PATH = sf_path
-                return sf_path
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pass
+            # Unix/Linux which command
+            for cmd_name in ['sf', 'sfdx']:
+                try:
+                    result = subprocess.run(['which', cmd_name], capture_output=True, text=True)
+                    if result.returncode == 0:
+                        sf_path = result.stdout.strip()
+                        print(f"[salesforce_refresh] Unix 'which' found CLI at: {sf_path}")
+                        if os.path.exists(sf_path):
+                            SF_CLI_PATH = sf_path
+                            return sf_path
+                except Exception as e:
+                    print(f"[salesforce_refresh] Unix 'which {cmd_name}' failed: {e}")
+    except Exception as e:
+        print(f"[salesforce_refresh] Error trying to locate CLI: {e}")
     
+    print("[salesforce_refresh] Could not find Salesforce CLI automatically")
     return None
 
 def run_sf_command(args):
@@ -104,60 +187,139 @@ def run_sf_command(args):
         return 1, "", "Salesforce CLI not found in PATH. Please set SF_CLI_PATH env variable."
     
     try:
+        # On Windows, shell=True can help resolve PATH issues
+        is_windows = sys.platform.startswith('win')
+        use_shell = is_windows
+        
+        # Check if we need to use Node.js to run the CLI
+        use_node = " " in sf_path and sf_path.startswith("node")
+        
+        if use_node:
+            # For Node.js execution, don't modify the command
+            cmd = sf_path + " " + " ".join(args)
+            print(f"[salesforce_refresh] Running Node.js command: {cmd}")
+        # For Windows with shell=True, we need to pass a single string instead of a list
+        elif use_shell:
+            # Properly quote the path if it contains spaces
+            quoted_path = f'"{sf_path}"' if " " in sf_path else sf_path
+            cmd = f'{quoted_path} {" ".join(args)}'
+            print(f"[salesforce_refresh] Running Windows command: {cmd}")
+        else:
+            cmd = [sf_path] + args
+            print(f"[salesforce_refresh] Running Unix command: {' '.join(cmd)}")
+            
+        # Execute the command
         result = subprocess.run(
-            [sf_path] + args,
+            cmd,
             capture_output=True,
-            text=True
+            text=True,
+            shell=use_shell,  # Use shell on Windows
+            timeout=60  # Add timeout to prevent hanging
         )
         return result.returncode, result.stdout, result.stderr
+    except subprocess.TimeoutExpired:
+        return 1, "", "Command timed out after 60 seconds"
     except (subprocess.SubprocessError, FileNotFoundError) as e:
         return 1, "", f"Error running Salesforce CLI: {e}"
 
 def get_cli_credentials(org_alias='louisfirm'):
     """
-    Get Salesforce credentials from CLI if available.
+    Get the Salesforce access token from the CLI.
     
     Args:
-        org_alias (str): The alias of the Salesforce org to use
-    
+        org_alias (str): The Salesforce org alias to use
+        
     Returns:
-        tuple: (access_token, instance_url) or (None, None) if CLI not available
+        tuple: (token, instance_url) or (None, None) if not found
     """
     try:
-        # First check if the org exists
+        print(f"[salesforce_refresh] Attempting to get credentials from Salesforce CLI for org '{org_alias}'")
+        
+        # First check if we have any orgs available
         returncode, stdout, stderr = run_sf_command(['org', 'list', '--json'])
         
-        if returncode == 0:
-            org_list = json.loads(stdout)
-            orgs = org_list.get('result', {}).get('nonScratchOrgs', [])
-            found_org = False
-            for org in orgs:
-                if org.get('alias') == org_alias:
-                    found_org = True
-                    break
+        if returncode != 0:
+            print(f"[salesforce_refresh] Failed to list orgs: {stderr}")
+            return None, None
+        
+        try:
+            orgs_data = json.loads(stdout)
             
-            if not found_org:
-                print(f"[salesforce_refresh] Org alias '{org_alias}' not found in CLI")
-                # List available orgs
-                if orgs:
-                    print("[salesforce_refresh] Available orgs:")
-                    for org in orgs:
-                        if org.get('alias'):
-                            print(f"  - {org.get('alias')}")
+            # Check if the specified alias exists
+            available_orgs = orgs_data.get('result', {}).get('nonScratchOrgs', [])
+            aliases = [org.get('alias') for org in available_orgs if org.get('alias')]
+            
+            if not aliases:
+                print("[salesforce_refresh] No org aliases found in Salesforce CLI")
                 return None, None
+                
+            if org_alias not in aliases:
+                print(f"[salesforce_refresh] Warning: Org alias '{org_alias}' not found in CLI")
+                print(f"[salesforce_refresh] Available aliases: {', '.join(aliases)}")
+                
+                # If alias not found but we have at least one org, use the first one with an alias
+                first_alias = next((org.get('alias') for org in available_orgs if org.get('alias')), None)
+                if first_alias:
+                    print(f"[salesforce_refresh] Using available org alias '{first_alias}' instead")
+                    org_alias = first_alias
+                else:
+                    print("[salesforce_refresh] No usable org aliases found")
+                    return None, None
+        except json.JSONDecodeError:
+            print(f"[salesforce_refresh] Failed to parse org list output as JSON")
+            print(f"[salesforce_refresh] Output: {stdout}")
+            return None, None
         
-        # Run sf org display command
-        returncode, stdout, stderr = run_sf_command(['org', 'display', '--target-org', org_alias, '--json'])
+        # Check if the token for the alias (now verified to exist) is available
+        if org_alias:
+            try:
+                # Try the modern `sf org display` command first
+                returncode, stdout, stderr = run_sf_command(['org', 'display', '--json', '--target-org', org_alias])
+                
+                if returncode == 0:
+                    data = json.loads(stdout)
+                    if 'result' in data:
+                        access_token = data['result'].get('accessToken')
+                        instance_url = data['result'].get('instanceUrl')
+                        
+                        if access_token and instance_url:
+                            print(f"[salesforce_refresh] Successfully retrieved token from CLI for org '{org_alias}'")
+                            
+                            # Update .env file with the token for later use
+                            update_env_file("SALESFORCE_ACCESS_TOKEN", access_token)
+                            update_env_file("SALESFORCE_INSTANCE_URL", instance_url)
+                            
+                            return access_token, instance_url
+                else:
+                    print(f"[salesforce_refresh] Failed to get org details: {stderr}")
+                    print("[salesforce_refresh] Trying alternate command format...")
+                    
+                    # Try the older format in case user has sfdx CLI
+                    returncode, stdout, stderr = run_sf_command(['force:org:display', '--json', '--targetusername', org_alias])
+                    
+                    if returncode == 0:
+                        data = json.loads(stdout)
+                        if 'result' in data:
+                            access_token = data['result'].get('accessToken')
+                            instance_url = data['result'].get('instanceUrl')
+                            
+                            if access_token and instance_url:
+                                print(f"[salesforce_refresh] Successfully retrieved token using older sfdx CLI command for org '{org_alias}'")
+                                
+                                # Update .env file with the token for later use
+                                update_env_file("SALESFORCE_ACCESS_TOKEN", access_token)
+                                update_env_file("SALESFORCE_INSTANCE_URL", instance_url)
+                                
+                                return access_token, instance_url
+                    else:
+                        print(f"[salesforce_refresh] Alternate command also failed: {stderr}")
+            except Exception as e:
+                print(f"[salesforce_refresh] Error getting org details from CLI: {e}")
         
-        if returncode == 0:
-            data = json.loads(stdout)
-            return (
-                data['result']['accessToken'],
-                data['result']['instanceUrl']
-            )
+        print("[salesforce_refresh] Could not retrieve valid token from Salesforce CLI")
         return None, None
-    except (json.JSONDecodeError, KeyError) as e:
-        print(f"[salesforce_refresh] Error parsing CLI output: {e}")
+    except Exception as e:
+        print(f"[salesforce_refresh] Error getting CLI credentials: {e}")
         return None, None
 
 def print_diagnostics():
@@ -223,8 +385,14 @@ def print_diagnostics():
     if sf_path:
         print(f"  SF CLI found at: {sf_path}")
         try:
-            import subprocess
-            result = subprocess.run([sf_path, "--version"], capture_output=True, text=True)
+            use_shell = sys.platform.startswith('win')
+            if use_shell:
+                cmd = f'"{sf_path}" --version'
+            else:
+                cmd = [sf_path, "--version"]
+                
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=use_shell)
+            
             if result.returncode == 0:
                 print(f"  SF CLI version: {result.stdout.strip()}")
             else:
@@ -263,299 +431,326 @@ def print_diagnostics():
     
     print("\n========== END DIAGNOSTICS ==========\n")
 
-def authenticate_with_username_password(username=None, password=None, security_token=None, instance_url=None):
+def authenticate_with_username_password():
     """
-    Authenticate with Salesforce using username and password.
-    
-    Args:
-        username (str, optional): Salesforce username. If None, will look in environment variables.
-        password (str, optional): Salesforce password. If None, will look in environment variables.
-        security_token (str, optional): Salesforce security token. If None, will look in environment variables.
-        instance_url (str, optional): Salesforce instance URL. If None, will look in environment variables.
-        
-    Returns:
-        tuple: (token, instance_url) if successful, (None, None) otherwise
+    Authenticates with Salesforce using username-password flow.
+    Returns a tuple of (token, instance_url) if successful, otherwise (None, None).
     """
-    print("[salesforce_refresh] Attempting to authenticate with username and password")
-    
-    # Get credentials from arguments or environment
-    username = username or os.getenv("SALESFORCE_USERNAME")
-    password = password or os.getenv("SALESFORCE_PASSWORD")
-    security_token = security_token or os.getenv("SALESFORCE_SECURITY_TOKEN", "")
-    instance_url = instance_url or os.getenv("SALESFORCE_INSTANCE_URL", "https://louisfirm.my.salesforce.com")
-    client_id = os.getenv("SALESFORCE_CLIENT_ID", "3MVG9G9pzCUSkzZtNzGualTRUWEBg9Hz3PDYbJYA0neDR9d_DTmNOQWUNHPblnCXVWNzG6jOAa5RfTCsw8xPt")
-    client_secret = os.getenv("SALESFORCE_CLIENT_SECRET", "5E54C4E4D4B2FFE1D6A5089FBE8DB49A7BE45B0A7BE4C7E1E3F0C2E5022F4D0E")
-    
-    if not username or not password:
-        print("[salesforce_refresh] Missing username or password")
-        # Print diagnostic information if we're missing credentials
-        print_diagnostics()
-        return None, None
-    
-    # Compose the request
-    auth_url = f"{instance_url}/services/oauth2/token"
-    if "http" not in auth_url:
-        auth_url = f"https://{auth_url}"
-        
-    # Optional debug message
-    print(f"[salesforce_refresh] Using authentication URL: {auth_url}")
-    
-    params = {
-        "grant_type": "password",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "username": username,
-        "password": password + security_token
-    }
-    
     try:
-        import requests
-        response = requests.post(auth_url, data=params)
+        # Get credentials, checking the environment first
+        client_id = os.environ.get('SALESFORCE_CLIENT_ID')
+        client_secret = os.environ.get('SALESFORCE_CLIENT_SECRET')
+        username = os.environ.get('SALESFORCE_USERNAME')
+        password = os.environ.get('SALESFORCE_PASSWORD')
+        security_token = os.environ.get('SALESFORCE_SECURITY_TOKEN', '')
         
-        if response.status_code == 200:
-            result = response.json()
-            token = result.get("access_token")
-            if not instance_url:
-                instance_url = result.get("instance_url")
+        # If not in environment, try reading from .env file
+        if not all([client_id, client_secret, username, password]):
+            print("[salesforce_refresh] Some credentials not found in environment, trying .env file")
+            load_dotenv()
+            client_id = os.environ.get('SALESFORCE_CLIENT_ID') or dotenv_values().get('SALESFORCE_CLIENT_ID')
+            client_secret = os.environ.get('SALESFORCE_CLIENT_SECRET') or dotenv_values().get('SALESFORCE_CLIENT_SECRET')
+            username = os.environ.get('SALESFORCE_USERNAME') or dotenv_values().get('SALESFORCE_USERNAME')
+            password = os.environ.get('SALESFORCE_PASSWORD') or dotenv_values().get('SALESFORCE_PASSWORD')
+            security_token = os.environ.get('SALESFORCE_SECURITY_TOKEN') or dotenv_values().get('SALESFORCE_SECURITY_TOKEN', '')
+        
+        # Print debug info about which credentials were found
+        print(f"[salesforce_refresh] Username: {username or 'Not found'}")
+        print(f"[salesforce_refresh] Client ID: {'Found' if client_id else 'Not found'}")
+        print(f"[salesforce_refresh] Client Secret: {'Found' if client_secret else 'Not found'}")
+        print(f"[salesforce_refresh] Security Token: {'Found' if security_token else 'Not found (may be required)'}")
+        
+        if not all([client_id, client_secret, username, password]):
+            missing = []
+            if not client_id: missing.append("SALESFORCE_CLIENT_ID")
+            if not client_secret: missing.append("SALESFORCE_CLIENT_SECRET")
+            if not username: missing.append("SALESFORCE_USERNAME")
+            if not password: missing.append("SALESFORCE_PASSWORD")
             
-            if token and instance_url:
-                print("[salesforce_refresh] Successfully authenticated with username and password")
-                return token, instance_url
-            else:
-                print("[salesforce_refresh] Missing token or instance_url in response")
-                return None, None
-        else:
-            print(f"[salesforce_refresh] Authentication failed with status code: {response.status_code}")
-            print(f"[salesforce_refresh] Response: {response.text}")
+            print(f"[salesforce_refresh] Missing required credentials: {', '.join(missing)}")
             return None, None
-    except Exception as e:
-        print(f"[salesforce_refresh] Error during username-password authentication: {e}")
-        return None, None
-
-def refresh_salesforce_token(update_env=True, org_alias='louisfirm'):
-    """
-    Attempt to refresh the Salesforce token by different methods. Will try:
-    1. Get token directly from CLI if already logged in
-    2. Refresh CLI authentication
-    3. Use username/password authentication
-    
-    Args:
-        update_env (bool): Whether to update the .env file with the token
-        org_alias (str): The Salesforce org alias to use
         
-    Returns:
-        tuple: (token, instance_url) or (None, None) if all methods fail
-    """
-    # First, try to get credentials directly (if already logged in)
-    token, instance_url = get_cli_credentials(org_alias)
-    
-    if token and instance_url:
-        print(f"[salesforce_refresh] Successfully obtained token from CLI for org '{org_alias}'")
-        if update_env:
-            update_env_file("SALESFORCE_ACCESS_TOKEN", token)
-            update_env_file("SALESFORCE_INSTANCE_URL", instance_url)
-            print(f"[salesforce_refresh] Updated .env file with CLI token")
-        return token, instance_url
-    
-    # If direct credentials failed, try to refresh CLI authentication
-    print(f"[salesforce_refresh] No token available from CLI, trying to refresh CLI authentication...")
-    print(f"[salesforce_refresh] You may see a browser window open for authentication.")
-    
-    sf_cli = find_sf_cli()
-    if not sf_cli:
-        print(f"[salesforce_refresh] Could not find Salesforce CLI")
-        return None, None
-    
-    try:
-        # Try with different ports if needed (to handle port conflicts in server environments)
-        ports_to_try = [1717, 1718, 1719, 1720, 1721]  # Add more port options
+        # Security token warning if not provided
+        if not security_token:
+            print("[salesforce_refresh] WARNING: Security token not provided! This may cause authentication to fail.")
+            print("[salesforce_refresh] Security token is required unless your IP address is whitelisted in Salesforce.")
+            print("[salesforce_refresh] You can reset your security token in Salesforce: Settings > My Personal Information > Reset Security Token")
         
-        for port in ports_to_try:
-            try:
-                # Create a temporary sfdx-project.json file with the port config
-                project_config = {
-                    "oauthLocalPort": port
+        # Try multiple possible URLs
+        urls_to_try = [
+            f"https://{username.split('@')[1].split('.')[0]}.my.salesforce.com/services/oauth2/token",
+            "https://login.salesforce.com/services/oauth2/token",
+            "https://test.salesforce.com/services/oauth2/token"
+        ]
+        
+        # Remove any duplicate URLs
+        urls_to_try = list(set(urls_to_try))
+        
+        for url in urls_to_try:
+            # First try with security token
+            if security_token:
+                pwd_with_token = f"{password}{security_token}"
+                print(f"[salesforce_refresh] Trying authentication with security token to: {url}")
+                
+                data = {
+                    'grant_type': 'password',
+                    'client_id': client_id,
+                    'client_secret': client_secret,
+                    'username': username,
+                    'password': pwd_with_token
                 }
                 
-                # Save to temporary file
-                import tempfile
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-                    temp_path = temp_file.name
-                    json.dump(project_config, temp_file)
+                response = requests.post(url, data=data)
                 
-                print(f"[salesforce_refresh] Attempting CLI login with OAuth port {port}")
+                if response.status_code == 200:
+                    result = response.json()
+                    return result.get('access_token'), result.get('instance_url')
+            
+            # Then try without security token if we didn't succeed
+            print(f"[salesforce_refresh] Trying authentication without security token to: {url}")
+            
+            data = {
+                'grant_type': 'password',
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'username': username,
+                'password': password
+            }
+            
+            response = requests.post(url, data=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result.get('access_token'), result.get('instance_url')
+            
+            print(f"[salesforce_refresh] Authentication failed with status code {response.status_code} for {url}")
+            try:
+                error_info = response.json()
+                print(f"[salesforce_refresh] Response: {error_info}")
                 
-                # Run the login command with the specific project file
-                returncode, stdout, stderr = run_sf_command([
+                # Provide more helpful information based on error code
+                if 'error' in error_info:
+                    if error_info['error'] == 'invalid_grant':
+                        if 'authentication failure' in error_info.get('error_description', ''):
+                            print("[salesforce_refresh] Authentication failure. Possible causes:")
+                            print("  - Incorrect username or password")
+                            print("  - Missing or incorrect security token (if your IP is not whitelisted)")
+                            print("  - Account is locked or has IP restrictions")
+                    elif error_info['error'] == 'invalid_client_id':
+                        print("[salesforce_refresh] Invalid client ID. Please check your Connected App configuration.")
+                    elif error_info['error'] == 'inactive_user':
+                        print("[salesforce_refresh] User account is inactive. Please contact your Salesforce administrator.")
+                
+            except Exception as json_err:
+                print(f"[salesforce_refresh] Failed to parse error response: {response.text}")
+        
+        print("[salesforce_refresh] All authentication URLs failed")
+        return None, None
+    except Exception as e:
+        print(f"[salesforce_refresh] Error in username-password authentication: {e}")
+        return None, None
+
+def is_headless_environment():
+    """
+    Detect if running in a headless environment (no display/GUI).
+    This is important for server environments where browser-based auth won't work.
+    
+    Returns:
+        bool: True if running in a headless environment
+    """
+    # Check for common server/headless indicators
+    if 'SSH_CONNECTION' in os.environ or 'SSH_TTY' in os.environ:
+        return True
+        
+    # For Linux/Unix, check for DISPLAY environment variable
+    if not sys.platform.startswith('win') and 'DISPLAY' not in os.environ:
+        return True
+        
+    # For all platforms, check if we're running in a known CI/CD environment
+    ci_env_vars = ['CI', 'JENKINS_URL', 'TRAVIS', 'CIRCLECI', 'GITHUB_ACTIONS', 'GITLAB_CI']
+    for var in ci_env_vars:
+        if var in os.environ:
+            return True
+            
+    return False
+
+def refresh_salesforce_token(org_alias='louisfirm'):
+    """
+    Refreshes the Salesforce token using the Salesforce CLI.
+    Returns a tuple of (token, instance_url) if successful, otherwise (None, None).
+    """
+    try:
+        # Try to get the token via CLI first
+        token, instance_url = get_cli_credentials(org_alias)
+        if token and instance_url:
+            return token, instance_url
+        
+        # If token not found in CLI, try to login again
+        if not is_headless_environment():
+            print("[salesforce_refresh] Token not found in CLI, attempting to refresh CLI authentication")
+            try:
+                # Removed the --oauth-local-port parameter which isn't supported in newer CLI versions
+                login_command = [
                     'org', 'login', 'web',
-                    '--instance-url', 'https://louisfirm.my.salesforce.com',
+                    '--instance-url', 'https://login.salesforce.com',
                     '--alias', org_alias,
-                    '--set-default',
-                    '--json-config', temp_path
-                ])
+                    '--set-default'
+                ]
                 
-                # Remove temporary file
-                import os
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
+                returncode, stdout, stderr = run_sf_command(login_command)
                 
                 if returncode == 0:
-                    print(f"[salesforce_refresh] Successfully authenticated with Salesforce CLI on port {port}")
-                    # Try getting the token again
-                    token, instance_url = get_cli_credentials(org_alias)
-                    if token and instance_url:
-                        print(f"[salesforce_refresh] Successfully obtained token after CLI authentication")
-                        if update_env:
-                            update_env_file("SALESFORCE_ACCESS_TOKEN", token)
-                            update_env_file("SALESFORCE_INSTANCE_URL", instance_url)
-                            print(f"[salesforce_refresh] Updated .env file with CLI token")
-                        return token, instance_url
-                elif "PortInUseError" not in stderr:
-                    # If it's not a port issue, don't try more ports
-                    print(f"[salesforce_refresh] CLI login failed with non-port error: {stderr}")
-                    break
+                    print("[salesforce_refresh] CLI login successful, attempting to get token")
+                    return get_cli_credentials(org_alias)
                 else:
-                    print(f"[salesforce_refresh] Port {port} in use, trying next port...")
-                    continue
-            
-            except Exception as port_error:
-                print(f"[salesforce_refresh] Error during CLI login with port {port}: {port_error}")
-        
-        # If we get here, all ports failed or CLI login failed for non-port reason
-        print(f"[salesforce_refresh] CLI login failed: {stderr}")
-            
-        # If we're in a headless environment (likely server), try username-password method
-        if "PortInUseError" in stderr or "browser" in stderr.lower() or "display" in stderr.lower():
-            print("[salesforce_refresh] Detected headless environment, trying username-password authentication")
-            return authenticate_with_username_password()
-    except Exception as e:
-        print(f"[salesforce_refresh] Error during CLI login: {e}")
-        
-        # Try username-password method as fallback
+                    if "Nonexistent flag: --oauth-local-port" in stderr:
+                        print("[salesforce_refresh] CLI login failed with unsupported flag. Your CLI version doesn't support --oauth-local-port")
+                    else:
+                        print(f"[salesforce_refresh] CLI login failed: {stderr}")
+            except Exception as e:
+                print(f"[salesforce_refresh] CLI login failed with error: {e}")
+        else:
+            print("[salesforce_refresh] Skipping browser-based authentication in headless environment")
+    
+        # As a fallback, try username-password flow
         print("[salesforce_refresh] Falling back to username-password authentication")
         return authenticate_with_username_password()
-    
-    return None, None
+    except Exception as e:
+        print(f"[salesforce_refresh] Error refreshing token: {e}")
+        return None, None
 
 def update_env_file(key, value):
     """
-    Update a key-value pair in the .env file.
+    Update a key-value pair in the .env file
     
     Args:
-        key (str): The environment variable key
-        value (str): The new value to set
+        key (str): The environment variable name
+        value (str): The value to set
     """
-    try:
-        env_path = ".env"
-        
-        # Check if .env file exists, create if not
-        if not os.path.exists(env_path):
-            with open(env_path, 'w') as file:
-                file.write(f"{key}={value}\n")
-            return
-        
-        # Read the current .env file
-        with open(env_path, 'r') as file:
-            lines = file.readlines()
-        
-        # Find and replace the line with the key
-        updated = False
-        for i, line in enumerate(lines):
-            if line.startswith(f"{key}="):
-                lines[i] = f"{key}={value}\n"
-                updated = True
-                break
-        
-        # If the key wasn't found, add it
-        if not updated:
-            lines.append(f"{key}={value}\n")
-        
-        # Write the updated content back to the .env file
-        with open(env_path, 'w') as file:
-            file.writelines(lines)
-    except Exception as e:
-        print(f"[salesforce_refresh] Error updating .env file: {e}")
+    if not os.path.exists(".env"):
+        print(f"[salesforce_refresh] Creating new .env file")
+        with open(".env", "w") as f:
+            f.write(f"{key}={value}\n")
+        return
+    
+    # Read the current .env file
+    with open(".env", "r") as f:
+        lines = f.readlines()
+    
+    # Check if the key already exists
+    key_exists = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith(f"{key}="):
+            lines[i] = f"{key}={value}\n"
+            key_exists = True
+            break
+    
+    # If the key doesn't exist, add it
+    if not key_exists:
+        lines.append(f"{key}={value}\n")
+    
+    # Write the updated .env file
+    with open(".env", "w") as f:
+        f.writelines(lines)
+    
+    print(f"[salesforce_refresh] Updated {key} in .env file")
 
 def verify_credentials():
     """
-    Verify that Salesforce CLI is properly configured.
+    Verify if Salesforce credentials are available via CLI or environment.
+    Also validates CLI operation on the current system.
     
     Returns:
-        bool: True if CLI is available and configured
+        bool: True if credentials are available and CLI works, False otherwise
     """
-    print("[salesforce_refresh] Verifying Salesforce CLI credentials...")
-    
-    # Check CLI availability
+    # First check if CLI is available at all
     sf_path = find_sf_cli()
-    if sf_path:
-        print(f"[salesforce_refresh] ✅ Salesforce CLI found at: {sf_path}")
+    if not sf_path:
+        print("[salesforce_refresh] Salesforce CLI not found")
+        return False
+    
+    # Test CLI operation with a simple command
+    try:
+        print(f"[salesforce_refresh] Testing CLI operation with '--version' command...")
+        cmd = None
+        is_windows = sys.platform.startswith('win')
         
-        # Get version
-        returncode, stdout, stderr = run_sf_command(['--version'])
-        if returncode == 0:
-            print(f"[salesforce_refresh] ✅ CLI version: {stdout.strip()}")
-            
-            # Check available orgs
+        # Check if we're using Node.js to run CLI
+        if " " in sf_path and sf_path.startswith("node"):
+            # Node.js execution
+            cmd = f"{sf_path} --version"
+            shell = True
+        elif is_windows:
+            # Windows execution
+            cmd = f'"{sf_path}" --version' if " " in sf_path else f'{sf_path} --version'
+            shell = True
+        else:
+            # Unix execution
+            cmd = [sf_path, "--version"]
+            shell = False
+        
+        print(f"[salesforce_refresh] Running CLI test: {cmd if isinstance(cmd, str) else ' '.join(cmd)}")
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            shell=shell,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            print(f"[salesforce_refresh] CLI test successful: {result.stdout.strip()}")
+            cli_works = True
+        else:
+            print(f"[salesforce_refresh] CLI test failed: {result.stderr}")
+            cli_works = False
+    except Exception as e:
+        print(f"[salesforce_refresh] CLI test failed with exception: {e}")
+        cli_works = False
+    
+    # Now check if we already have a token via CLI
+    if cli_works:
+        print(f"[salesforce_refresh] CLI works, checking for existing org connection...")
+        try:
             returncode, stdout, stderr = run_sf_command(['org', 'list', '--json'])
             if returncode == 0:
                 try:
-                    orgs_data = json.loads(stdout)
-                    orgs = orgs_data.get('result', {}).get('nonScratchOrgs', [])
-                    
+                    data = json.loads(stdout)
+                    orgs = data.get('result', {}).get('nonScratchOrgs', [])
                     if orgs:
-                        print("[salesforce_refresh] ✅ Salesforce orgs found:")
-                        for org in orgs:
-                            org_status = "✅ " if org.get('isDefaultUsername') else "  "
-                            if org.get('alias'):
-                                print(f"  {org_status}{org.get('alias')} ({org.get('username')})")
-                            else:
-                                print(f"  {org_status}{org.get('username')}")
+                        print(f"[salesforce_refresh] Found {len(orgs)} connected Salesforce orgs")
                         return True
                     else:
-                        print("[salesforce_refresh] ❌ No Salesforce orgs found")
-                        is_headless = not sys.platform.startswith('win') or 'DISPLAY' not in os.environ
-                        
-                        if is_headless:
-                            print("[salesforce_refresh] ❗ Detected headless environment (no display/browser)")
-                            print("[salesforce_refresh] For headless authentication options:")
-                            print("  1. sfdxurl method: sf org login sfdx-url -f auth_url.txt")
-                            print("  2. JWT method: sf org login jwt -u username -f server.key -i client_id")
-                            print("  3. Username-password: sf org login username-password -u username -p password+token")
-                            print("\nSee deployment_instructions.md for detailed steps.")
-                        else:
-                            print("[salesforce_refresh] Please authenticate with:")
-                            print("  sf org login web --instance-url https://louisfirm.my.salesforce.com --alias louisfirm")
+                        print("[salesforce_refresh] No orgs connected to CLI")
                 except json.JSONDecodeError:
-                    print("[salesforce_refresh] ❌ Error parsing CLI output")
-                    print(f"[salesforce_refresh] Raw output: {stdout}")
+                    print(f"[salesforce_refresh] Could not parse CLI output as JSON")
             else:
-                print("[salesforce_refresh] ❌ Unable to list Salesforce orgs")
-                print(f"[salesforce_refresh] Error: {stderr}")
-        else:
-            print("[salesforce_refresh] ❌ Salesforce CLI test command failed")
-            print(f"[salesforce_refresh] Error: {stderr}")
-    else:
-        print("[salesforce_refresh] ❌ Salesforce CLI not found in PATH")
-        print("[salesforce_refresh] To fix this issue:")
-        print("  1. Set the SF_CLI_PATH environment variable to the full path of the sf command")
-        
-        if sys.platform.startswith('win'):
-            print("     For example: set SF_CLI_PATH=C:\\Program Files\\sfdx\\bin\\sf.exe")
-        else:
-            print("     For example: export SF_CLI_PATH=/usr/local/bin/sf")
-            
-        print("  2. Or edit this script to set SF_CLI_PATH directly at the top")
-        print("  3. Or make sure the Salesforce CLI is in your system PATH")
-        
-        if sys.platform.startswith('win'):
-            print("\n[salesforce_refresh] To find where sf is installed, run in PowerShell:")
-            print("  where.exe sf")
-        else:
-            print("\n[salesforce_refresh] To find where sf is installed, run:")
-            print("  which sf")
-        return False
+                print(f"[salesforce_refresh] CLI org list failed: {stderr}")
+        except Exception as e:
+            print(f"[salesforce_refresh] Error checking CLI orgs: {e}")
     
-    return True
+    # Fall back to checking environment variables if CLI is not available
+    username = os.getenv("SALESFORCE_USERNAME") 
+    password = os.getenv("SALESFORCE_PASSWORD")
+    
+    # Also check .env file
+    if (not username or not password) and os.path.exists(".env"):
+        try:
+            from dotenv import dotenv_values
+            env_values = dotenv_values(".env")
+            if "SALESFORCE_USERNAME" in env_values and "SALESFORCE_PASSWORD" in env_values:
+                print("[salesforce_refresh] Username and password found in .env file")
+                return True
+        except Exception as e:
+            print(f"[salesforce_refresh] Error reading .env file: {e}")
+    
+    if username and password:
+        print("[salesforce_refresh] Username and password found in environment variables")
+        return True
+    
+    print("[salesforce_refresh] No valid credentials found")
+    return False
 
 def get_salesforce_headers(org_alias='louisfirm', force_refresh=False):
     """
@@ -655,50 +850,122 @@ def get_salesforce_headers(org_alias='louisfirm', force_refresh=False):
     
     return headers, instance_url
 
-def salesforce_request(method, endpoint, data=None, params=None, org_alias='louisfirm'):
+def salesforce_request(method, url, headers=None, params=None, data=None, json_data=None, timeout=30):
     """
-    User-friendly function to make a Salesforce API request with automatic authentication.
+    Make a request to Salesforce API with proper authentication and error handling.
     
     Args:
-        method (str): HTTP method (get, post, patch, delete)
-        endpoint (str): API endpoint (e.g., '/services/data/v63.0/query')
-        data (dict, optional): Request payload for POST/PATCH requests
-        params (dict, optional): URL parameters for GET requests
-        org_alias (str): The alias of the Salesforce org to use with CLI
+        method (str): HTTP method ('get', 'post', etc.)
+        url (str): Full URL or path (if path, instance_url will be prepended)
+        headers (dict, optional): HTTP headers. Authorization will be added if not present.
+        params (dict, optional): Query parameters.
+        data (dict, optional): Form data.
+        json_data (dict, optional): JSON data (for POST/PATCH).
+        timeout (int, optional): Request timeout in seconds.
         
     Returns:
-        dict or None: Response data or None if request failed
+        dict or None: JSON response data or None if request failed.
     """
-    headers, instance_url = get_salesforce_headers(org_alias)
+    import requests
     
-    if not headers or not instance_url:
-        print("[salesforce_refresh] Unable to get valid authentication for Salesforce request")
-        return None
+    # Initialize headers if not provided
+    if headers is None:
+        # Get cached token or refresh if needed
+        token, instance_url = None, None
+        
+        # Try to get from environment variables first
+        token = os.getenv("SALESFORCE_ACCESS_TOKEN")
+        instance_url = os.getenv("SALESFORCE_INSTANCE_URL")
+        
+        # If not in env vars, try to get from .env file directly
+        if not token or not instance_url:
+            try:
+                from dotenv import dotenv_values
+                env_values = dotenv_values(".env")
+                if not token and "SALESFORCE_ACCESS_TOKEN" in env_values:
+                    token = env_values["SALESFORCE_ACCESS_TOKEN"]
+                if not instance_url and "SALESFORCE_INSTANCE_URL" in env_values:
+                    instance_url = env_values["SALESFORCE_INSTANCE_URL"]
+            except Exception as e:
+                print(f"[salesforce_refresh] Error reading .env file: {e}")
+        
+        # If still no token, try to refresh
+        if not token or not instance_url:
+            token, instance_url = refresh_salesforce_token()
+            if not token or not instance_url:
+                print("[salesforce_refresh] Failed to get Salesforce token")
+                return None
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
     
-    url = f"{instance_url}{endpoint}"
+    # If URL is a path, prepend instance_url
+    if not url.startswith('http'):
+        # Find instance_url in headers or use from prior steps
+        instance_url = None
+        
+        # Try to extract from Authorization header
+        if headers and 'Authorization' in headers:
+            auth_parts = headers['Authorization'].split()
+            if len(auth_parts) == 2 and auth_parts[0].lower() == 'bearer':
+                # This is a token, so we need an instance URL
+                instance_url = os.getenv("SALESFORCE_INSTANCE_URL")
+                if not instance_url:
+                    try:
+                        from dotenv import dotenv_values
+                        env_values = dotenv_values(".env")
+                        if "SALESFORCE_INSTANCE_URL" in env_values:
+                            instance_url = env_values["SALESFORCE_INSTANCE_URL"]
+                    except Exception:
+                        pass
+        
+        if not instance_url:
+            print("[salesforce_refresh] No instance URL found for request")
+            return None
+            
+        url = f"{instance_url.rstrip('/')}/{url.lstrip('/')}"
     
+    # Make the request with proper error handling
     try:
         method = method.lower()
+        
         if method == 'get':
-            response = requests.get(url, headers=headers, params=params)
+            response = requests.get(url, headers=headers, params=params, timeout=timeout)
         elif method == 'post':
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(url, headers=headers, params=params, data=data, json=json_data, timeout=timeout)
         elif method == 'patch':
-            response = requests.patch(url, headers=headers, json=data)
+            response = requests.patch(url, headers=headers, params=params, data=data, json=json_data, timeout=timeout)
         elif method == 'delete':
-            response = requests.delete(url, headers=headers)
+            response = requests.delete(url, headers=headers, params=params, timeout=timeout)
         else:
             print(f"[salesforce_refresh] Unsupported HTTP method: {method}")
             return None
         
-        response.raise_for_status()
-        return response.json()
-    
-    except requests.exceptions.RequestException as e:
-        print(f"[salesforce_refresh] Error making {method.upper()} request to {url}: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"[salesforce_refresh] Response status: {e.response.status_code}")
-            print(f"[salesforce_refresh] Response body: {e.response.text}")
+        # Check if request was successful
+        if response.status_code >= 200 and response.status_code < 300:
+            if response.content:
+                try:
+                    return response.json()
+                except json.JSONDecodeError:
+                    print(f"[salesforce_refresh] Error parsing response as JSON: {response.text}")
+                    return response.text
+            return {}
+        else:
+            print(f"[salesforce_refresh] API request failed with status code: {response.status_code}")
+            print(f"[salesforce_refresh] Response: {response.text}")
+            
+            # Check for specific error types
+            if response.status_code == 401:
+                print("[salesforce_refresh] Authentication failed. Token may have expired.")
+                # Clear cached token to force a refresh next time
+                if os.getenv("SALESFORCE_ACCESS_TOKEN"):
+                    os.environ.pop("SALESFORCE_ACCESS_TOKEN")
+            
+            return None
+    except requests.RequestException as e:
+        print(f"[salesforce_refresh] Request error: {e}")
         return None
 
 def ensure_file_permissions():
@@ -722,94 +989,231 @@ def ensure_file_permissions():
             print(f"[salesforce_refresh] Error setting file permissions: {e}")
 
 if __name__ == "__main__":
-    # Check file permissions for Linux environments
-    ensure_file_permissions()
-    
-    print("\n================== Salesforce CLI Path Check ==================\n")
-    sf_path = find_sf_cli()
-    
-    # Determine platform
-    is_windows = sys.platform.startswith('win')
-    
-    if sf_path:
-        print(f"✅ Found Salesforce CLI at: {sf_path}")
-    else:
-        print("❌ Could not find Salesforce CLI automatically")
-        print("If you know where sf is installed, set the SF_CLI_PATH environment variable:")
+    try:
+        print("\n================== Salesforce CLI Path Check ==================\n")
         
-        if is_windows:
-            print("For PowerShell: $env:SF_CLI_PATH = 'C:\\path\\to\\sf.exe'")
-            print("For CMD: set SF_CLI_PATH=C:\\path\\to\\sf.exe")
-            print("\nAttempting to find sf using 'where' command...")
-            cmd = 'where'
+        sf_path = find_sf_cli()
+        if sf_path:
+            print(f"✅ Found Salesforce CLI at: {sf_path}")
+            
+            # On Linux, check permissions
+            if not sys.platform.startswith('win'):
+                try:
+                    # Check if the file is executable
+                    is_executable = os.access(sf_path, os.X_OK)
+                    print(f"CLI executable permissions: {'Yes' if is_executable else 'No'}")
+                    
+                    if not is_executable and os.path.exists(sf_path):
+                        print(f"Attempting to make CLI executable...")
+                        try:
+                            os.chmod(sf_path, os.stat(sf_path).st_mode | 0o111)  # Add execute permission
+                            print(f"Added execute permission to {sf_path}")
+                        except Exception as chmod_error:
+                            print(f"Failed to set execute permission: {chmod_error}")
+                except Exception as e:
+                    print(f"Error checking CLI permissions: {e}")
         else:
-            print("For bash/zsh: export SF_CLI_PATH=/path/to/sf")
-            print("\nAttempting to find sf using 'which' command...")
-            cmd = 'which'
-        
-        try:
-            result = subprocess.run([cmd, 'sf'], capture_output=True, text=True)
-            if result.returncode == 0:
-                paths = result.stdout.strip().split('\n')
-                print(f"Found potential paths with '{cmd} sf':")
-                for path in paths:
-                    print(f"  - {path}")
-                print("\nTo use one of these paths, set SF_CLI_PATH environment variable:")
+            print("❌ Salesforce CLI not found in PATH")
+            # Print some debugging information about where we looked
+            print("\nSearched the following locations:")
+            
+            is_windows = sys.platform.startswith('win')
+            
+            if is_windows:
+                common_locations = [
+                    os.path.expanduser("~\\AppData\\Roaming\\npm\\sf.cmd"),
+                    os.path.expanduser("~\\AppData\\Roaming\\npm\\sfdx.cmd"),
+                    "C:\\Program Files\\sfdx\\bin\\sf.cmd",
+                    os.path.expanduser("~\\AppData\\Local\\sfdx\\bin\\sf.cmd")
+                ]
                 
+                for loc in common_locations:
+                    print(f"  - {loc}: {'Exists' if os.path.exists(loc) else 'Not found'}")
+                
+                # Try to find it using system commands
+                try:
+                    cmd = 'where'
+                    print(f"\nAttempting to find CLI using '{cmd} sf'...")
+                    
+                    # Try various CLI names
+                    for cli_name in ['sf.cmd', 'sf.exe', 'sfdx.cmd', 'sfdx.exe']:
+                        try:
+                            result = subprocess.run(['where', cli_name], capture_output=True, text=True, timeout=5)
+                            if result.returncode == 0:
+                                paths = result.stdout.strip().split('\n')
+                                print(f"Found potential paths with 'where {cli_name}':")
+                                for path in paths:
+                                    print(f"  - {path}")
+                                
+                                # Try to use it by setting it in the current process
+                                if paths and os.path.exists(paths[0]):
+                                    print(f"\nAttempting to use: {paths[0]}")
+                                    SF_CLI_PATH = paths[0]
+                                    sf_path = paths[0]  # Update sf_path for later use
+                            else:
+                                print(f"'where {cli_name}' did not find any paths")
+                        except Exception as cli_error:
+                            print(f"Error running 'where {cli_name}': {cli_error}")
+                    
+                    # Try Node.js directly if we can find it
+                    node_path = shutil.which('node')
+                    if node_path:
+                        print(f"\nFound Node.js at: {node_path}")
+                        js_files = [
+                            os.path.expanduser("~\\AppData\\Roaming\\npm\\node_modules\\@salesforce\\cli\\bin\\sf.js"),
+                            os.path.expanduser("~\\AppData\\Roaming\\npm\\node_modules\\sfdx-cli\\bin\\sfdx.js")
+                        ]
+                        
+                        for js_file in js_files:
+                            if os.path.exists(js_file):
+                                print(f"Found CLI JS file: {js_file}")
+                                SF_CLI_PATH = f"{node_path} {js_file}"
+                                sf_path = SF_CLI_PATH  # Update sf_path for later use
+                                print(f"Set SF_CLI_PATH to use Node.js directly: {SF_CLI_PATH}")
+                except Exception as e:
+                    print(f"Error searching for CLI: {e}")
+            else:
+                common_locations = [
+                    "/usr/local/bin/sf", 
+                    "/usr/bin/sf",
+                    os.path.expanduser("~/.npm-global/bin/sf")
+                ]
+                
+                for loc in common_locations:
+                    print(f"  - {loc}: {'Exists' if os.path.exists(loc) else 'Not found'}")
+                
+                # Try to find using which command
+                try:
+                    for cmd_name in ['sf', 'sfdx']:
+                        result = subprocess.run(['which', cmd_name], capture_output=True, text=True)
+                        if result.returncode == 0:
+                            path = result.stdout.strip()
+                            print(f"Found CLI using 'which {cmd_name}': {path}")
+                            SF_CLI_PATH = path
+                            sf_path = path  # Update sf_path for later use
+                except Exception as e:
+                    print(f"Error running 'which' command: {e}")
+            
+            # Check if we have Node.js and npm available for installation
+            node_available = shutil.which('node')
+            npm_available = shutil.which('npm')
+            
+            print(f"\nNode.js available: {'Yes' if node_available else 'No'}")
+            print(f"npm available: {'Yes' if npm_available else 'No'}")
+            
+            if npm_available:
+                print("\nYou can install Salesforce CLI with:")
+                print("  npm install -g @salesforce/cli")
+                
+                # Offer to install for them
+                try:
+                    install_sf = input("\nWould you like to install Salesforce CLI now? (y/n): ")
+                    if install_sf.lower() in ['y', 'yes']:
+                        print("\nInstalling Salesforce CLI...")
+                        subprocess.run(['npm', 'install', '-g', '@salesforce/cli'], check=True)
+                        print("\nInstallation complete. Rerunning CLI check...")
+                        sf_path = find_sf_cli()  # Check again after installation
+                except Exception as install_error:
+                    print(f"Error during installation: {install_error}")
+            else:
+                print("\nTo install Salesforce CLI:")
                 if is_windows:
-                    print(f"  For PowerShell: $env:SF_CLI_PATH = '{paths[0]}'")
-                    print(f"  For CMD: set SF_CLI_PATH={paths[0]}")
+                    print("1. Install Node.js from https://nodejs.org/")
+                    print("2. Open Command Prompt as administrator")
+                    print("3. Run: npm install -g @salesforce/cli")
                 else:
-                    print(f"  For bash/zsh: export SF_CLI_PATH={paths[0]}")
+                    print("1. Install Node.js and npm:")
+                    print("   - Ubuntu/Debian: sudo apt install nodejs npm")
+                    print("   - CentOS/RHEL: sudo yum install nodejs npm")
+                    print("   - macOS: brew install node")
+                    print("2. Run: npm install -g @salesforce/cli")
+        
+        print("\n================== Salesforce CLI Authentication Check ==================\n")
+        cli_available = verify_credentials()
+        
+        # Check if there are existing orgs and set the org_alias accordingly
+        existing_org_alias = None
+        if cli_available:
+            try:
+                returncode, stdout, stderr = run_sf_command(['org', 'list', '--json'])
+                if returncode == 0:
+                    data = json.loads(stdout)
+                    orgs = data.get('result', {}).get('nonScratchOrgs', [])
+                    if orgs:
+                        # Get the default org or the first one with an alias
+                        for org in orgs:
+                            if org.get('alias'):
+                                if org.get('isDefaultUsername') or not existing_org_alias:
+                                    existing_org_alias = org.get('alias')
+                        if existing_org_alias:
+                            print(f"[salesforce_refresh] Found existing org with alias: {existing_org_alias}")
+                            print(f"[salesforce_refresh] Using this org alias instead of the default 'louisfirm'")
+            except Exception as e:
+                print(f"[salesforce_refresh] Error checking existing orgs: {e}")
+        
+        org_alias = existing_org_alias or 'louisfirm'
+        
+        # For headless environments, try direct authentication first
+        if is_headless_environment():
+            print("\n================== Detected Headless Environment ==================\n")
+            print("Trying direct username-password authentication without relying on CLI...")
+            token, instance_url = authenticate_with_username_password()
+            
+            if token:
+                print(f"\n✅ Authentication successful with username-password flow!")
+                print(f"New token: {token[:10]}... (Token obtained successfully)")
+                print(f"Instance URL: {instance_url}")
                 
-                # Try to use it anyway by setting it in the current process
-                if paths and os.path.exists(paths[0]):
-                    print(f"\nAutomatically using found path: {paths[0]}")
-                    SF_CLI_PATH = paths[0]
-                    sf_path = paths[0]  # Update sf_path for the check below
+                # Update .env with the token
+                update_env_file("SALESFORCE_ACCESS_TOKEN", token)
+                update_env_file("SALESFORCE_INSTANCE_URL", instance_url)
+                
+                # Test sample query
+                print("\n================== Testing API Query ==================\n")
+                query = "SELECT Id, Name FROM Account LIMIT 5"
+                result = salesforce_request('get', '/services/data/v57.0/query', 
+                                            params={'q': query}, 
+                                            headers={"Authorization": f"Bearer {token}"})
+                
+                if result and 'records' in result:
+                    print(f"✅ API query successful! Found {len(result.get('records', []))} records")
+                else:
+                    print("❌ API query failed")
             else:
-                print(f"❌ '{cmd} sf' command did not find any paths")
-        except Exception as e:
-            print(f"❌ Failed to run '{cmd} sf' command: {e}")
-            
-    # If sf is in PATH but Python can't see it, display debugging info
-    if not sf_path:
-        print("\n================== PATH Debugging Info ==================\n")
-        print("System PATH variable:")
-        for path in os.environ.get('PATH', '').split(os.pathsep):
-            print(f"  - {path}")
+                print("\n❌ Direct authentication failed, trying CLI-based methods...")
+                # Continue with CLI-based authentication attempts
         
-        if not is_windows:
-            print("\nFor Linux/Unix systems, make sure:")
-            print("1. Salesforce CLI is installed: npm install -g @salesforce/cli")
-            print("2. The installation directory is in your PATH")
-            print("3. The sf executable has execute permissions (chmod +x /path/to/sf)")
-            print("4. Try creating a symlink: sudo ln -s /path/to/sf /usr/local/bin/sf")
-    
-    print("\n================== Salesforce CLI Authentication Check ==================\n")
-    cli_available = verify_credentials()
-    
-    if cli_available:
-        print("\n================== Attempting Token Refresh ==================\n")
-        token, instance_url = refresh_salesforce_token()
-        
-        if token:
-            print(f"\n✅ Authentication successful!")
-            print(f"New token: {token[:10]}... (Token refreshed successfully)")
-            print(f"Instance URL: {instance_url}")
+        # Try regular CLI-based auth if direct auth failed or we're in a GUI environment
+        if cli_available or sf_path:
+            print("\n================== Attempting Token Refresh ==================\n")
+            token, instance_url = refresh_salesforce_token(org_alias=org_alias)
             
-            # Test sample query
-            print("\n================== Testing API Query ==================\n")
-            query = "SELECT Id, Name FROM Account LIMIT 5"
-            result = salesforce_request('get', '/services/data/v63.0/query', params={'q': query})
-            
-            if result:
-                print(f"✅ API query successful! Found {result.get('totalSize', 0)} records")
+            if token:
+                print(f"\n✅ Authentication successful!")
+                print(f"New token: {token[:10]}... (Token refreshed successfully)")
+                print(f"Instance URL: {instance_url}")
+                
+                # Test sample query
+                print("\n================== Testing API Query ==================\n")
+                query = "SELECT Id, Name FROM Account LIMIT 5"
+                result = salesforce_request('get', '/services/data/v57.0/query', 
+                                           params={'q': query}, 
+                                           headers={"Authorization": f"Bearer {token}"})
+                
+                if result and 'records' in result:
+                    print(f"✅ API query successful! Found {len(result.get('records', []))} records")
+                else:
+                    print("❌ API query failed")
             else:
-                print("❌ API query failed")
+                print("\n❌ Authentication failed")
+                print("Please run one of these commands manually to authenticate:")
+                print(f"  1. sf org login web --instance-url https://login.salesforce.com --alias {org_alias} --set-default")
+                print("  2. Or add SALESFORCE_USERNAME, SALESFORCE_PASSWORD, and SALESFORCE_SECURITY_TOKEN to your .env file")
         else:
-            print("\n❌ Authentication failed")
-            print("Please ensure you are logged into Salesforce CLI with: sf org login web --instance-url https://louisfirm.my.salesforce.com --alias louisfirm")
-    else:
-        print("\n❌ Salesforce CLI not configured properly")
-        print("Please check the issues above and try again") 
+            print("\n❌ Salesforce CLI not configured properly")
+            print("Please check the issues above and try again")
+    except Exception as e:
+        print(f"Error in main execution: {e}")
+        import traceback
+        traceback.print_exc()
+        print_diagnostics() 
