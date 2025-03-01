@@ -47,21 +47,46 @@ def load_credentials() -> Tuple[str, str, str, str]:
     Load Microsoft Graph API credentials from environment variables or .env file.
     
     Returns:
-        Tuple[str, str, str, str]: tenant_id, client_id, client_secret, scope
+        tuple: (tenant_id, client_id, client_secret, scope)
     """
-    # Load .env file if present
+    # Load environment variables if not already loaded
     load_dotenv()
     
-    # Get credentials from environment variables
-    tenant_id = os.getenv("MS_TENANT_ID")
-    client_id = os.getenv("MS_CLIENT_ID")
-    client_secret = os.getenv("MS_CLIENT_SECRET")
-    scope = os.getenv("MS_SCOPE")
+    # Try to get credentials from environment
+    tenant_id = os.environ.get('MS_TENANT_ID', '')
+    client_id = os.environ.get('MS_CLIENT_ID', '')
+    client_secret = os.environ.get('MS_CLIENT_SECRET', '')
+    scope = os.environ.get('MS_API_SCOPE', 'https://graph.microsoft.com/.default')
     
     # Check if credentials are available
     if not all([tenant_id, client_id, client_secret]):
         logger.warning("One or more Microsoft Graph API credentials are missing.")
+        
+        # Log what credentials are available/missing for debugging
+        logger.debug(f"MS_TENANT_ID available: {bool(tenant_id)}")
+        logger.debug(f"MS_CLIENT_ID available: {bool(client_id)}")
+        logger.debug(f"MS_CLIENT_SECRET available: {bool(client_secret)}")
+        
         logger.warning("Consider setting MS_TENANT_ID, MS_CLIENT_ID, and MS_CLIENT_SECRET environment variables.")
+        
+        # Try to load from .env file explicitly (in case load_dotenv() didn't work)
+        try:
+            from dotenv import dotenv_values
+            config = dotenv_values(".env")
+            
+            if not tenant_id and 'MS_TENANT_ID' in config:
+                tenant_id = config['MS_TENANT_ID']
+                logger.debug("Loaded MS_TENANT_ID from .env file")
+                
+            if not client_id and 'MS_CLIENT_ID' in config:
+                client_id = config['MS_CLIENT_ID']
+                logger.debug("Loaded MS_CLIENT_ID from .env file")
+                
+            if not client_secret and 'MS_CLIENT_SECRET' in config:
+                client_secret = config['MS_CLIENT_SECRET']
+                logger.debug("Loaded MS_CLIENT_SECRET from .env file")
+        except Exception as e:
+            logger.warning(f"Error trying to load from .env file: {str(e)}")
     
     return tenant_id, client_id, client_secret, scope
 
@@ -86,6 +111,14 @@ def get_bearer_token(force_refresh=False) -> Optional[str]:
     
     # Load credentials
     tenant_id, client_id, client_secret, scope = load_credentials()
+    
+    # Verify we have the required credentials
+    if not (tenant_id and client_id and client_secret):
+        logger.error("Cannot get bearer token: Missing SharePoint credentials")
+        logger.error("Please set MS_TENANT_ID, MS_CLIENT_ID, and MS_CLIENT_SECRET environment variables")
+        return None
+    
+    logger.info(f"Requesting new token from Microsoft OAuth endpoint (Tenant: {tenant_id[:6]}...)")
     
     url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     
@@ -130,18 +163,98 @@ def get_bearer_token(force_refresh=False) -> Optional[str]:
 
 def get_auth_headers() -> Dict[str, str]:
     """
-    Returns headers with authorization bearer token for use with Microsoft Graph API.
+    Get headers for Microsoft Graph API with authentication
     
     Returns:
-        Dict[str, str]: Headers dictionary with authorization
+        Dict[str, str]: Headers with bearer token
     """
     token = get_bearer_token()
-    if token:
-        return {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-    return {"Content-Type": "application/json"}
+    
+    if not token:
+        logger.error("Failed to get bearer token for authentication headers")
+        return {}
+        
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json"
+    }
+
+def verify_token(token: str) -> bool:
+    """
+    Verify if a token is valid by making a test request to Microsoft Graph API.
+    
+    Args:
+        token (str): The bearer token to verify
+        
+    Returns:
+        bool: True if token is valid, False otherwise
+    """
+    if not token:
+        return False
+        
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json"
+    }
+    
+    # Make a simple request to verify token
+    test_url = "https://graph.microsoft.com/v1.0/me"
+    try:
+        response = requests.get(test_url, headers=headers, timeout=10)
+        
+        # If we get a 401, token is invalid
+        if response.status_code == 401:
+            logger.warning("SharePoint token verification failed: Unauthorized (401)")
+            return False
+            
+        # Any non-error response means token is valid
+        if response.status_code < 400:
+            logger.info("SharePoint token verification successful")
+            return True
+            
+        # For other errors, log but consider token might still be valid
+        logger.warning(f"SharePoint token verification got unexpected status: {response.status_code}")
+        # We'll be optimistic and assume token might still be valid
+        return True
+    except Exception as e:
+        logger.warning(f"Error verifying SharePoint token: {str(e)}")
+        # Be conservative and assume token is invalid on exceptions
+        return False
+
+def get_reliable_token(max_attempts=3) -> Optional[str]:
+    """
+    Get a reliable SharePoint token with verification and retries.
+    
+    Args:
+        max_attempts (int): Maximum number of refresh attempts
+        
+    Returns:
+        Optional[str]: A verified token or None if all attempts fail
+    """
+    for attempt in range(max_attempts):
+        # Always force refresh on attempts after the first
+        force_refresh = (attempt > 0)
+        
+        # Get token
+        token = get_bearer_token(force_refresh=force_refresh)
+        
+        # No token was obtained
+        if not token:
+            logger.warning(f"Failed to get SharePoint token on attempt {attempt+1}/{max_attempts}")
+            continue
+            
+        # Verify token works
+        if verify_token(token):
+            return token
+        else:
+            logger.warning(f"Token verification failed on attempt {attempt+1}/{max_attempts}")
+            # Clear token cache to force a fresh token on next attempt
+            global _token_cache
+            _token_cache = {"token": None, "expiry": 0}
+            
+    # All attempts failed
+    logger.error(f"Failed to get reliable SharePoint token after {max_attempts} attempts")
+    return None
 
 def sharepoint_request(method, endpoint, data=None, params=None) -> Optional[Dict]:
     """
