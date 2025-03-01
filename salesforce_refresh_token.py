@@ -160,274 +160,129 @@ def get_cli_credentials(org_alias='louisfirm'):
         print(f"[salesforce_refresh] Error parsing CLI output: {e}")
         return None, None
 
-def print_diagnostics():
-    """
-    Print detailed diagnostics about the environment to help debug authentication issues.
-    This is useful when running in server/headless environments.
-    """
-    print("\n========== SALESFORCE AUTHENTICATION DIAGNOSTICS ==========")
-    
-    # Check Python version
-    import sys
-    print(f"Python version: {sys.version}")
-    print(f"Platform: {sys.platform}")
-    
-    # Check environment
-    import os
-    print("\nEnvironment variables:")
-    env_vars_to_check = [
-        "SALESFORCE_ACCESS_TOKEN", 
-        "SALESFORCE_INSTANCE_URL",
-        "SALESFORCE_USERNAME",
-        "SALESFORCE_PASSWORD",
-        "MS_TENANT_ID",
-        "MS_CLIENT_ID",
-        "MS_CLIENT_SECRET"
-    ]
-    
-    for var in env_vars_to_check:
-        if var in os.environ:
-            # Mask the value for security
-            val = os.environ[var]
-            if len(val) > 8:
-                masked_val = val[:4] + "*" * (len(val) - 8) + val[-4:]
-            else:
-                masked_val = "****"
-            print(f"  {var}: {masked_val}")
-        else:
-            print(f"  {var}: Not set")
-    
-    # Check for .env file
-    print("\n.env file:")
-    if os.path.exists(".env"):
-        print("  .env file exists")
-        try:
-            from dotenv import dotenv_values
-            env_values = dotenv_values(".env")
-            for key in env_vars_to_check:
-                if key in env_values:
-                    val = env_values[key]
-                    if len(val) > 8:
-                        masked_val = val[:4] + "*" * (len(val) - 8) + val[-4:]
-                    else:
-                        masked_val = "****"
-                    print(f"  {key} in .env: {masked_val}")
-        except Exception as e:
-            print(f"  Error reading .env file: {str(e)}")
-    else:
-        print("  .env file does not exist")
-    
-    # Check SF CLI
-    print("\nSalesforce CLI:")
-    sf_path = find_sf_cli()
-    if sf_path:
-        print(f"  SF CLI found at: {sf_path}")
-        try:
-            import subprocess
-            result = subprocess.run([sf_path, "--version"], capture_output=True, text=True)
-            if result.returncode == 0:
-                print(f"  SF CLI version: {result.stdout.strip()}")
-            else:
-                print(f"  Error getting SF CLI version: {result.stderr}")
-        except Exception as e:
-            print(f"  Error running SF CLI: {str(e)}")
-    else:
-        print("  SF CLI not found")
-    
-    # Check network connectivity
-    print("\nNetwork connectivity:")
-    try:
-        import socket
-        socket.create_connection(("louisfirm.my.salesforce.com", 443), timeout=5)
-        print("  Can connect to Salesforce (louisfirm.my.salesforce.com:443)")
-    except Exception as e:
-        print(f"  Cannot connect to Salesforce: {str(e)}")
-    
-    try:
-        socket.create_connection(("graph.microsoft.com", 443), timeout=5)
-        print("  Can connect to Microsoft Graph API (graph.microsoft.com:443)")
-    except Exception as e:
-        print(f"  Cannot connect to Microsoft Graph API: {str(e)}")
-    
-    # Check for ports in use
-    print("\nPorts in use:")
-    oauth_ports = [1717, 1718, 1719, 1720, 1721]
-    for port in oauth_ports:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.bind(("localhost", port))
-            sock.close()
-            print(f"  Port {port} is available")
-        except Exception:
-            print(f"  Port {port} is in use or unavailable")
-    
-    print("\n========== END DIAGNOSTICS ==========\n")
-
 def authenticate_with_username_password(username=None, password=None, security_token=None, instance_url=None):
     """
-    Authenticate with Salesforce using username and password.
+    Authenticate with Salesforce using username and password (plus security token).
+    This method is suitable for headless server environments.
     
     Args:
-        username (str, optional): Salesforce username. If None, will look in environment variables.
-        password (str, optional): Salesforce password. If None, will look in environment variables.
-        security_token (str, optional): Salesforce security token. If None, will look in environment variables.
-        instance_url (str, optional): Salesforce instance URL. If None, will look in environment variables.
+        username (str): Salesforce username
+        password (str): Salesforce password
+        security_token (str): Salesforce security token (may be needed depending on IP restrictions)
+        instance_url (str): Salesforce instance URL (e.g., https://louisfirm.my.salesforce.com)
         
     Returns:
-        tuple: (token, instance_url) if successful, (None, None) otherwise
+        tuple: (access_token, instance_url) or (None, None) if authentication fails
     """
     print("[salesforce_refresh] Attempting to authenticate with username and password")
     
-    # Get credentials from arguments or environment
-    username = username or os.getenv("SALESFORCE_USERNAME")
-    password = password or os.getenv("SALESFORCE_PASSWORD")
-    security_token = security_token or os.getenv("SALESFORCE_SECURITY_TOKEN", "")
-    instance_url = instance_url or os.getenv("SALESFORCE_INSTANCE_URL", "https://louisfirm.my.salesforce.com")
-    client_id = os.getenv("SALESFORCE_CLIENT_ID", "3MVG9G9pzCUSkzZtNzGualTRUWEBg9Hz3PDYbJYA0neDR9d_DTmNOQWUNHPblnCXVWNzG6jOAa5RfTCsw8xPt")
-    client_secret = os.getenv("SALESFORCE_CLIENT_SECRET", "5E54C4E4D4B2FFE1D6A5089FBE8DB49A7BE45B0A7BE4C7E1E3F0C2E5022F4D0E")
-    
-    if not username or not password:
-        print("[salesforce_refresh] Missing username or password")
-        # Print diagnostic information if we're missing credentials
-        print_diagnostics()
-        return None, None
-    
-    # Compose the request
-    auth_url = f"{instance_url}/services/oauth2/token"
-    if "http" not in auth_url:
-        auth_url = f"https://{auth_url}"
+    # Get credentials from environment if not provided
+    if not username:
+        username = os.getenv("SALESFORCE_USERNAME")
+    if not password:
+        password = os.getenv("SALESFORCE_PASSWORD")
+    if not security_token:
+        security_token = os.getenv("SALESFORCE_SECURITY_TOKEN")
+    if not instance_url:
+        instance_url = os.getenv("SALESFORCE_INSTANCE_URL", "https://louisfirm.my.salesforce.com")
         
-    # Optional debug message
-    print(f"[salesforce_refresh] Using authentication URL: {auth_url}")
+    # Check if credentials are available
+    if not username or not password:
+        print("[salesforce_refresh] Username or password not provided")
+        return None, None
+        
+    # Combine password and security token if token is provided
+    if security_token:
+        password_with_token = password + security_token
+    else:
+        password_with_token = password
+        
+    # Get the login endpoint - this is the same for all Salesforce instances
+    login_url = "https://login.salesforce.com/services/oauth2/token"
     
-    params = {
+    # Prepare payload for OAuth token request
+    payload = {
         "grant_type": "password",
-        "client_id": client_id,
-        "client_secret": client_secret,
+        "client_id": os.getenv("SALESFORCE_CLIENT_ID", "PlatformCLI"),  # Default to PlatformCLI for SF CLI
+        "client_secret": os.getenv("SALESFORCE_CLIENT_SECRET", ""),
         "username": username,
-        "password": password + security_token
+        "password": password_with_token
     }
     
     try:
-        import requests
-        response = requests.post(auth_url, data=params)
+        # Make request to get token
+        response = requests.post(login_url, data=payload)
         
+        # Check for successful response
         if response.status_code == 200:
-            result = response.json()
-            token = result.get("access_token")
-            if not instance_url:
-                instance_url = result.get("instance_url")
+            data = response.json()
+            access_token = data.get("access_token")
+            instance_url = data.get("instance_url")
             
-            if token and instance_url:
-                print("[salesforce_refresh] Successfully authenticated with username and password")
-                return token, instance_url
-            else:
-                print("[salesforce_refresh] Missing token or instance_url in response")
-                return None, None
+            print(f"[salesforce_refresh] Successfully authenticated with username/password method")
+            
+            # Save token to environment variables
+            if access_token and instance_url:
+                if "update_env_file" in globals():
+                    update_env_file("SALESFORCE_ACCESS_TOKEN", access_token)
+                    update_env_file("SALESFORCE_INSTANCE_URL", instance_url)
+                
+                return access_token, instance_url
         else:
             print(f"[salesforce_refresh] Authentication failed with status code: {response.status_code}")
             print(f"[salesforce_refresh] Response: {response.text}")
-            return None, None
+                
     except Exception as e:
         print(f"[salesforce_refresh] Error during username-password authentication: {e}")
-        return None, None
+        
+    return None, None
 
 def refresh_salesforce_token(update_env=True, org_alias='louisfirm'):
     """
-    Attempt to refresh the Salesforce token by different methods. Will try:
-    1. Get token directly from CLI if already logged in
-    2. Refresh CLI authentication
-    3. Use username/password authentication
+    Refresh Salesforce access token using CLI.
     
     Args:
-        update_env (bool): Whether to update the .env file with the token
-        org_alias (str): The Salesforce org alias to use
+        update_env (bool): Whether to update the .env file with the new token
+        org_alias (str): The alias of the Salesforce org to use with CLI
         
     Returns:
-        tuple: (token, instance_url) or (None, None) if all methods fail
+        tuple: (new_token, instance_url) - The new access token and instance URL
     """
-    # First, try to get credentials directly (if already logged in)
-    token, instance_url = get_cli_credentials(org_alias)
+    print("[salesforce_refresh] Attempting to refresh Salesforce access token using CLI...")
     
+    # Try to get token from CLI
+    token, instance_url = get_cli_credentials(org_alias)
     if token and instance_url:
         print(f"[salesforce_refresh] Successfully obtained token from CLI for org '{org_alias}'")
         if update_env:
             update_env_file("SALESFORCE_ACCESS_TOKEN", token)
             update_env_file("SALESFORCE_INSTANCE_URL", instance_url)
-            print(f"[salesforce_refresh] Updated .env file with CLI token")
+            print("[salesforce_refresh] Updated .env file with CLI token")
         return token, instance_url
     
-    # If direct credentials failed, try to refresh CLI authentication
-    print(f"[salesforce_refresh] No token available from CLI, trying to refresh CLI authentication...")
-    print(f"[salesforce_refresh] You may see a browser window open for authentication.")
-    
-    sf_cli = find_sf_cli()
-    if not sf_cli:
-        print(f"[salesforce_refresh] Could not find Salesforce CLI")
-        return None, None
+    # If no token from CLI, try to refresh CLI auth by running login
+    print("[salesforce_refresh] No token available from CLI, trying to refresh CLI authentication...")
+    print("[salesforce_refresh] You may see a browser window open for authentication.")
     
     try:
-        # Try with different ports if needed (to handle port conflicts in server environments)
-        ports_to_try = [1717, 1718, 1719, 1720, 1721]  # Add more port options
+        returncode, stdout, stderr = run_sf_command([
+            'org', 'login', 'web', 
+            '--instance-url', 'https://louisfirm.my.salesforce.com',
+            '--alias', org_alias,
+            '--set-default'
+        ])
         
-        for port in ports_to_try:
-            try:
-                # Create a temporary sfdx-project.json file with the port config
-                project_config = {
-                    "oauthLocalPort": port
-                }
-                
-                # Save to temporary file
-                import tempfile
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-                    temp_path = temp_file.name
-                    json.dump(project_config, temp_file)
-                
-                print(f"[salesforce_refresh] Attempting CLI login with OAuth port {port}")
-                
-                # Run the login command with the specific project file
-                returncode, stdout, stderr = run_sf_command([
-                    'org', 'login', 'web',
-                    '--instance-url', 'https://louisfirm.my.salesforce.com',
-                    '--alias', org_alias,
-                    '--set-default',
-                    '--json-config', temp_path
-                ])
-                
-                # Remove temporary file
-                import os
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-                
-                if returncode == 0:
-                    print(f"[salesforce_refresh] Successfully authenticated with Salesforce CLI on port {port}")
-                    # Try getting the token again
-                    token, instance_url = get_cli_credentials(org_alias)
-                    if token and instance_url:
-                        print(f"[salesforce_refresh] Successfully obtained token after CLI authentication")
-                        if update_env:
-                            update_env_file("SALESFORCE_ACCESS_TOKEN", token)
-                            update_env_file("SALESFORCE_INSTANCE_URL", instance_url)
-                            print(f"[salesforce_refresh] Updated .env file with CLI token")
-                        return token, instance_url
-                elif "PortInUseError" not in stderr:
-                    # If it's not a port issue, don't try more ports
-                    print(f"[salesforce_refresh] CLI login failed with non-port error: {stderr}")
-                    break
-                else:
-                    print(f"[salesforce_refresh] Port {port} in use, trying next port...")
-                    continue
+        if returncode == 0:
+            print(f"[salesforce_refresh] Successfully authenticated with Salesforce CLI")
+            # Try getting the token again
+            return get_cli_credentials(org_alias)
+        else:
+            print(f"[salesforce_refresh] CLI login failed: {stderr}")
             
-            except Exception as port_error:
-                print(f"[salesforce_refresh] Error during CLI login with port {port}: {port_error}")
-        
-        # If we get here, all ports failed or CLI login failed for non-port reason
-        print(f"[salesforce_refresh] CLI login failed: {stderr}")
-            
-        # If we're in a headless environment (likely server), try username-password method
-        if "PortInUseError" in stderr or "browser" in stderr.lower() or "display" in stderr.lower():
-            print("[salesforce_refresh] Detected headless environment, trying username-password authentication")
-            return authenticate_with_username_password()
+            # If we're in a headless environment (likely server), try username-password method
+            if "PortInUseError" in stderr or "browser" in stderr.lower() or "display" in stderr.lower():
+                print("[salesforce_refresh] Detected headless environment, trying username-password authentication")
+                return authenticate_with_username_password()
     except Exception as e:
         print(f"[salesforce_refresh] Error during CLI login: {e}")
         
@@ -809,7 +664,7 @@ if __name__ == "__main__":
                 print("❌ API query failed")
         else:
             print("\n❌ Authentication failed")
-            print("Please ensure you are logged into Salesforce CLI with: sf org login web --instance-url https://louisfirm.my.salesforce.com --alias louisfirm")
+            print("Please ensure you are logged into Salesforce CLI with: sf org login web")
     else:
         print("\n❌ Salesforce CLI not configured properly")
         print("Please check the issues above and try again") 
