@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+search the codebase for context, ensure that there is not an existing function or method that exists. Look through the file structure closely this is a large project. You can always use the command line tool to access the AWS CLI and confirm why a particular issue is happening.
