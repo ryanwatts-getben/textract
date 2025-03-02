@@ -530,6 +530,23 @@ def get_sharepoint_documents_for_matter(matter_context: Dict[str, Any], download
     # Clean up the folder path
     sharepoint_folder = sharepoint_folder.strip()
     
+    if not sharepoint_folder:
+        # Log the issue
+        logger.warning("No SharePoint folder found in matter context")
+        
+        # For debugging: check if matter ID is available to create a fallback path
+        matter_id = None
+        if "matter" in matter_context and isinstance(matter_context["matter"], dict):
+            matter_id = matter_context["matter"].get("Id")
+        
+        if matter_id:
+            # Use the matter ID as a fallback folder path for testing
+            logger.warning(f"Using matter ID as fallback SharePoint folder path: {matter_id}")
+            sharepoint_folder = matter_id
+        else:
+            logger.error("Cannot create fallback SharePoint folder path - no matter ID found")
+            return []
+    
     # Get the documents from the SharePoint folder
     return get_documents_from_sharepoint_folder(sharepoint_folder, download_docs, target_dir, recursive)
 

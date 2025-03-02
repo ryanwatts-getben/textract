@@ -2259,12 +2259,18 @@ def get_nulaw_documents():
                                 # Encode to base64
                                 base64_content = base64.b64encode(file_content).decode('utf-8')
                                 
+                                # Extract folder name for debug and better reporting
+                                folder_name = None
+                                parent_ref = doc.get("parentReference", {})
+                                if parent_ref:
+                                    folder_name = parent_ref.get("name")
+                                    logger.debug(f"[app] Document {filename} parentReference: {parent_ref}")
                                 # Add to result list
                                 result_documents.append({
                                     "filename": filename,
                                     "data": base64_content,
                                     "contentType": content_type,
-                                    "folder": (lambda pr: (logger.debug(f"[app] ParentRef for {filename}: {pr}") or pr.get("name")))(doc.get("parentReference", {}))
+                                    "folder": folder_name
                                 })
                                 logger.info(f"[app] Added SharePoint document: {filename}")
                                 continue  # Skip to next document
@@ -2299,7 +2305,7 @@ def get_nulaw_documents():
                                 "filename": file_name,
                                 "data": base64_content,
                                 "contentType": content_type,
-                                "folder": (lambda pr: (logger.debug(f"[app] ParentRef for {filename}: {pr}") or pr.get("name")))(doc.get("parentReference", {}))
+                               "folder": folder_name
                             })
                             logger.info(f"[app] Added SharePoint document: {file_name}")
                         except Exception as download_error:
