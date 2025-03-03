@@ -110,6 +110,21 @@ werkzeug_logger.setLevel(logging.INFO)
 # Initialize Flask app
 app = Flask(__name__)
 
+# Add a before_request hook to disable logging for health check requests
+@app.before_request
+def log_request_info():
+    # Disable logging for health check GET requests to /nulaw
+    if request.method == 'GET' and request.path == '/nulaw':
+        # Temporarily increase werkzeug logger level to ERROR to suppress INFO messages
+        werkzeug_logger.setLevel(logging.ERROR)
+        
+@app.after_request
+def after_request(response):
+    # Reset werkzeug logger level back to INFO after request completes
+    if request.method == 'GET' and request.path == '/nulaw':
+        werkzeug_logger.setLevel(logging.INFO)
+    return response
+
 # Configure CORS
 CORS(app, resources=CORS_CONFIG)
 
@@ -2146,6 +2161,9 @@ def get_nulaw_documents():
         logger.error(f"[app] Error retrieving documents: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+# Configure rate limiter for Salesforce requests
+sf_rate_limiter = RateLimiter(max_calls=3, period=60)  # 3 calls per minute
+
 if __name__ == '__main__':
     # Initialize multiprocessing support
     import multiprocessing
@@ -2177,9 +2195,6 @@ if __name__ == '__main__':
     os.makedirs('cache/documents', exist_ok=True)
     os.makedirs('cache/sharepoint', exist_ok=True)
     os.makedirs('cache/matter_contexts', exist_ok=True)  # Add this line for matter context caching
-
-    # Configure rate limiter for Salesforce requests
-    sf_rate_limiter = RateLimiter(max_calls=3, period=60)  # 3 calls per minute
     
     # Start the Flask app
     app.run(host='0.0.0.0', port=5001)
