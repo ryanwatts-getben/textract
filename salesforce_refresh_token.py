@@ -478,7 +478,7 @@ def authenticate_with_username_password():
         
         # Try multiple possible URLs
         urls_to_try = [
-            f"os.environ.get('SALESFORCE_INSTANCE_URL')",
+            "https://louisfirm.my.salesforce.com",
         ]
         
         # Remove any duplicate URLs
