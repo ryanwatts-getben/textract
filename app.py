@@ -82,9 +82,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Reduce werkzeug logger verbosity for health check requests
+# Create a custom filter for werkzeug to filter out health check logs
+class HealthCheckFilter(logging.Filter):
+    def filter(self, record):
+        # Filter out GET /nulaw 200 messages (health checks)
+        # from any IP address (all AWS health checks)
+        return not (
+            hasattr(record, 'args') and 
+            isinstance(record.args, tuple) and 
+            len(record.args) >= 3 and 
+            'GET /nulaw HTTP/1.1' in str(record.args[1]) and 
+            record.args[2] == 200
+        )
+
+# Configure werkzeug logger to use the filter while keeping INFO level
 werkzeug_logger = logging.getLogger('werkzeug')
-werkzeug_logger.setLevel(logging.INFO)  # Showing INFO level logs
+werkzeug_logger.addFilter(HealthCheckFilter())
+werkzeug_logger.setLevel(logging.INFO)  # Keep INFO level for all other logs
+
 # Initialize Flask app
 app = Flask(__name__)
 
