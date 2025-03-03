@@ -407,7 +407,7 @@ def print_diagnostics():
     try:
         import socket
         socket.create_connection(("louisfirm.my.salesforce.com", 443), timeout=5)
-        print("  Can connect to Salesforce (louisfirm.my.salesforce.com:443)")
+        print(" Can connect to Salesforce (louisfirm.my.salesforce.com:443)")
     except Exception as e:
         print(f"  Cannot connect to Salesforce: {str(e)}")
     
@@ -478,9 +478,7 @@ def authenticate_with_username_password():
         
         # Try multiple possible URLs
         urls_to_try = [
-            f"https://{username.split('@')[1].split('.')[0]}.my.salesforce.com/services/oauth2/token",
-            "https://login.salesforce.com/services/oauth2/token",
-            "https://test.salesforce.com/services/oauth2/token"
+            f"os.environ.get('SALESFORCE_INSTANCE_URL')",
         ]
         
         # Remove any duplicate URLs
@@ -504,8 +502,9 @@ def authenticate_with_username_password():
                 
                 if response.status_code == 200:
                     result = response.json()
+                    update_env_file("SALESFORCE_ACCESS_TOKEN", result.get('access_token'))
                     return result.get('access_token'), result.get('instance_url')
-            
+                    
             # Then try without security token if we didn't succeed
             print(f"[salesforce_refresh] Trying authentication without security token to: {url}")
             
@@ -592,7 +591,7 @@ def refresh_salesforce_token(org_alias='louisfirm'):
                 # Removed the --oauth-local-port parameter which isn't supported in newer CLI versions
                 login_command = [
                     'org', 'login', 'web',
-                    '--instance-url', 'https://login.salesforce.com',
+                    '--instance-url', 'os.environ.get("SALESFORCE_INSTANCE_URL")',
                     '--alias', org_alias,
                     '--set-default'
                 ]
@@ -733,6 +732,9 @@ def verify_credentials():
     # Fall back to checking environment variables if CLI is not available
     username = os.getenv("SALESFORCE_USERNAME") 
     password = os.getenv("SALESFORCE_PASSWORD")
+    instance_url = os.getenv("SALESFORCE_INSTANCE_URL")
+    client_id = os.getenv("SALESFORCE_CLIENT_ID")
+    client_secret = os.getenv("SALESFORCE_CLIENT_SECRET")
     
     # Also check .env file
     if (not username or not password) and os.path.exists(".env"):
@@ -742,15 +744,25 @@ def verify_credentials():
             if "SALESFORCE_USERNAME" in env_values and "SALESFORCE_PASSWORD" in env_values:
                 print("[salesforce_refresh] Username and password found in .env file")
                 return True
+            if "SALESFORCE_INSTANCE_URL" in env_values and "SALESFORCE_CLIENT_ID" in env_values and "SALESFORCE_CLIENT_SECRET" in env_values:
+                print("[salesforce_refresh] Instance URL, client ID, and client secret found in .env file")
+                return True
         except Exception as e:
             print(f"[salesforce_refresh] Error reading .env file: {e}")
     
-    if username and password:
-        print("[salesforce_refresh] Username and password found in environment variables")
+    if username and password and instance_url and client_id and client_secret:
+        print("[salesforce_refresh] Username and password:   environment variables")
+        print(f"[salesforce_refresh] Instance URL: TRUE")
+        print(f"[salesforce_refresh] Client ID: TRUE")
+        print(f"[salesforce_refresh] Client Secret: TRUE")
         return True
-    
-    print("[salesforce_refresh] No valid credentials found")
-    return False
+    else:
+        print(f"[salesforce_refresh] Username: {username}")
+        print(f"[salesforce_refresh] Password: {password}")
+        print(f"[salesforce_refresh] Instance URL: {instance_url}")
+        print(f"[salesforce_refresh] Client ID: {client_id}")
+        print(f"[salesforce_refresh] Client Secret: {client_secret}")
+        return False
 
 def get_salesforce_headers(org_alias='louisfirm', force_refresh=False):
     """
@@ -1207,7 +1219,7 @@ if __name__ == "__main__":
             else:
                 print("\n❌ Authentication failed")
                 print("Please run one of these commands manually to authenticate:")
-                print(f"  1. sf org login web --instance-url https://login.salesforce.com --alias {org_alias} --set-default")
+                print(f"  1. sf org login web --instance-url os.environ.get('SALESFORCE_INSTANCE_URL') --alias {org_alias} --set-default")
                 print("  2. Or add SALESFORCE_USERNAME, SALESFORCE_PASSWORD, and SALESFORCE_SECURITY_TOKEN to your .env file")
         else:
             print("\n❌ Salesforce CLI not configured properly")
