@@ -95,10 +95,17 @@ class HealthCheckFilter(logging.Filter):
             record.args[2] == 200
         )
 
-# Configure werkzeug logger to use the filter while keeping INFO level
+# Completely replace werkzeug logger handlers with our custom filtered handler
 werkzeug_logger = logging.getLogger('werkzeug')
-werkzeug_logger.addFilter(HealthCheckFilter())
-werkzeug_logger.setLevel(logging.INFO)  # Keep INFO level for all other logs
+# Remove all existing handlers
+for handler in werkzeug_logger.handlers[:]:
+    werkzeug_logger.removeHandler(handler)
+# Create a new handler with our filter
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - [werkzeug] %(message)s'))
+handler.addFilter(HealthCheckFilter())
+werkzeug_logger.addHandler(handler)
+werkzeug_logger.setLevel(logging.INFO)
 
 # Initialize Flask app
 app = Flask(__name__)
