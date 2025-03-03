@@ -82,6 +82,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Reduce werkzeug logger verbosity for health check requests
+werkzeug_logger = logging.getLogger('werkzeug')
+werkzeug_logger.setLevel(logging.INFO)  # Showing INFO level logs
 # Initialize Flask app
 app = Flask(__name__)
 
@@ -1611,7 +1614,13 @@ def get_matter_context():
     """
     # For health check requests (GET), return simple 200 response
     if request.method == 'GET':
-        logger.info("[app] Health check GET request to /nulaw")
+        # Use a counter to reduce the frequency of health check logs
+        get_matter_context.health_check_counter = getattr(get_matter_context, 'health_check_counter', 0) + 1
+        
+        # Only log every 100th health check to reduce noise
+        if get_matter_context.health_check_counter % 100 == 0:
+            logger.debug(f"[app] Health check GET request to /nulaw (count: {get_matter_context.health_check_counter})")
+            
         return jsonify({"status": "healthy"}), 200
         
     try:
