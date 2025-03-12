@@ -14,7 +14,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('salesforce_create_new_client')
 
-def post_to_nulaw(matter_id: str, sf_path: Optional[str] = None, download_files: bool = True) -> Optional[Dict[str, Any]]:
+def post_to_nulaw(matter_id: str, sf_path: Optional[str] = None, download_files: bool = True, billing_email: str = None) -> Optional[Dict[str, Any]]:
     """
     Make a POST request to the /nulaw endpoint to get matter context
     
@@ -22,6 +22,7 @@ def post_to_nulaw(matter_id: str, sf_path: Optional[str] = None, download_files:
         matter_id (str): The Salesforce Matter ID
         sf_path (str, optional): Path to the Salesforce CLI executable
         download_files (bool): Whether to download files from SharePoint (defaults to True)
+        billing_email (str, optional): Email address for billing (if None, falls back to default)
         
     Returns:
         dict or None: Response data or None if request failed
@@ -43,6 +44,11 @@ def post_to_nulaw(matter_id: str, sf_path: Optional[str] = None, download_files:
         "matter_id": matter_id,
         "download_files": download_files
     }
+    
+    # Add billing_email to payload if provided
+    if billing_email:
+        payload["billing_email"] = billing_email
+        logger.info(f"[salesforce_create_new_client] Setting billing_email={billing_email}")
     
     if sf_path:
         payload["sf_path"] = sf_path
@@ -83,13 +89,14 @@ def filter_null_values(data):
     else:
         return data
 
-def format_project_payload(nulaw_response: Dict[str, Any], download_files: bool = True) -> Optional[Dict[str, Any]]:
+def format_project_payload(nulaw_response: Dict[str, Any], download_files: bool = True, billing_email: str = None) -> Optional[Dict[str, Any]]:
     """
     Format the response from /nulaw endpoint into the project creation payload
     
     Args:
         nulaw_response (dict): Response from the /nulaw endpoint
         download_files (bool): Whether to download files from SharePoint (defaults to True)
+        billing_email (str): Email address for billing (if None, falls back to skinner@everycase.ai)
         
     Returns:
         dict or None: Formatted payload for project creation or None if formatting failed
@@ -108,6 +115,10 @@ def format_project_payload(nulaw_response: Dict[str, Any], download_files: bool 
         # Get matter ID
         matter_id = nulaw_response.get('matter_id', '')
         logger.info(f"[salesforce_create_new_client] Including matter_id: {matter_id} in payload")
+        
+        # Use the provided billing_email or fall back to default
+        email = billing_email if billing_email else "skinner@everycase.ai"
+        logger.info(f"[salesforce_create_new_client] Using email: {email} for project")
         
         context = nulaw_response['context']
         matter = context.get('matter', {})
@@ -156,7 +167,7 @@ def format_project_payload(nulaw_response: Dict[str, Any], download_files: bool 
         payload = {
             "clientName": client_name,
             "matter_id": matter_id,  # Added the matter_id as requested
-            "projectEmailAddress": "skinner@everycase.ai",  # Always this
+            "projectEmailAddress": email,  # Use provided email instead of hardcoded value
             "incidentDate": incident_date,
             "description": "Injury Type: MVA",  # Always this
             "source": "NULAW",  # Always this
@@ -166,7 +177,7 @@ def format_project_payload(nulaw_response: Dict[str, Any], download_files: bool 
                 "FormFields": {
                     "client_name": client_name,
                     "matter_id": matter_id,  # Also add to form fields
-                    "email": "skinner@everycase.ai",  # Always this
+                    "email": email,  # Use provided email here too
                     "incident_date": incident_date,
                     "medical_bills_total": meds_total_str,  # Also use string version here
                     "injury_type": "MVA",  # Always this
@@ -256,7 +267,7 @@ def create_project(project_payload: Dict[str, Any], matter_id: str = 'unknown', 
                 
         return None
 
-def process_nulaw_response_and_create_project(nulaw_response: Dict[str, Any], dry_run: bool = False, download_files: bool = True) -> Optional[Dict[str, Any]]:
+def process_nulaw_response_and_create_project(nulaw_response: Dict[str, Any], dry_run: bool = False, download_files: bool = True, billing_email: str = None) -> Optional[Dict[str, Any]]:
     """
     Process a response from the /nulaw endpoint and create a new project
     
@@ -267,6 +278,7 @@ def process_nulaw_response_and_create_project(nulaw_response: Dict[str, Any], dr
         nulaw_response (dict): Response from the /nulaw endpoint
         dry_run (bool): If True, only format the payload without creating the project
         download_files (bool): Whether to download files from SharePoint (defaults to True)
+        billing_email (str): Email address for billing (if None, falls back to skinner@everycase.ai)
         
     Returns:
         dict or None: Response from project creation or formatted payload (if dry_run)
@@ -279,6 +291,10 @@ def process_nulaw_response_and_create_project(nulaw_response: Dict[str, Any], dr
     
     # Get matter ID for logging
     matter_id = nulaw_response.get('matter_id', 'unknown')
+    
+    # Get billing email for logging
+    email = billing_email if billing_email else "skinner@everycase.ai"
+    logger.info(f"[salesforce_create_new_client] Using billing email: {email}")
     
     # Generate timestamp for log filenames
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -305,7 +321,7 @@ def process_nulaw_response_and_create_project(nulaw_response: Dict[str, Any], dr
         logger.error(f"[salesforce_create_new_client] Failed to log nulaw response: {str(log_error)}")
     
     # Format the payload for project creation
-    project_payload = format_project_payload(nulaw_response, download_files)
+    project_payload = format_project_payload(nulaw_response, download_files, billing_email)
     if not project_payload:
         logger.error("[salesforce_create_new_client] Failed to format project payload")
         return None
@@ -354,6 +370,7 @@ def main():
     parser = argparse.ArgumentParser(description='Create a new client project from Salesforce Matter data')
     parser.add_argument('--matter-id', required=True, help='Salesforce Matter ID')
     parser.add_argument('--sf-path', help='Path to the Salesforce CLI executable (sf)')
+    parser.add_argument('--billing-email', help='Email address for billing')
     parser.add_argument('--dry-run', action='store_true', help='Only display the payload without creating the project')
     parser.add_argument('--download-files', dest='download_files', action='store_true', default=True, 
                         help='Download files from SharePoint (default: True)')
@@ -369,13 +386,13 @@ def main():
     logger.info(f"[salesforce_create_new_client] Starting with download_files={args.download_files}")
     
     # Step 1: Fetch data from /nulaw endpoint
-    nulaw_response = post_to_nulaw(args.matter_id, args.sf_path, args.download_files)
+    nulaw_response = post_to_nulaw(args.matter_id, args.sf_path, args.download_files, args.billing_email)
     if not nulaw_response:
         logger.error("[salesforce_create_new_client] Failed to get matter context")
         sys.exit(1)
     
     # Step 2 & 3: Format payload and create project
-    result = process_nulaw_response_and_create_project(nulaw_response, args.dry_run, args.download_files)
+    result = process_nulaw_response_and_create_project(nulaw_response, args.dry_run, args.download_files, args.billing_email)
     
     if result:
         # Print the result for inspection

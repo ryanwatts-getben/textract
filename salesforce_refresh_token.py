@@ -478,7 +478,7 @@ def authenticate_with_username_password():
         
         # Try multiple possible URLs
         urls_to_try = [
-            "https://louisfirm.my.salesforce.com",
+            "https://louisfirm.my.salesforce.com/services/oauth2/token",
         ]
         
         # Remove any duplicate URLs
