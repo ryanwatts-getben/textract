@@ -1641,6 +1641,7 @@ def get_matter_context():
     Expects:
         POST with JSON body containing:
         - matter_id: The Salesforce Matter ID to retrieve context for
+        - billing_email: The email address for billing
         - sf_path: (optional) Path to the Salesforce CLI executable
         - download_files: (optional, defaults to false) Whether to download files
         
@@ -1673,13 +1674,19 @@ def get_matter_context():
         if not matter_id:
             return jsonify({"error": "matter_id is required"}), 400
             
+        # Extract billing_email from request (required)
+        billing_email = request_data.get('billing_email')
+        
+        if not billing_email:
+            return jsonify({"error": "billing_email is required"}), 400
+            
         # Get sf_path from request (optional)
         sf_path = request_data.get('sf_path')
         
         # Get download_files from request (optional, defaults to False)
         download_files = request_data.get('download_files', False)
-
-        logger.info(f"[app] Fetching context for Matter ID: {matter_id}, download_files={download_files}")
+        
+        logger.info(f"[app] Fetching context for Matter ID: {matter_id}, billing_email: {billing_email}, download_files={download_files}")
         
         # Try to use cached context if available (similar to nulawdocs endpoint)
         context = None
@@ -1697,6 +1704,7 @@ def get_matter_context():
                 result = {
                     'status': 'success',
                     'matter_id': matter_id,
+                    'billing_email': billing_email,
                     'download_files': download_files,
                     'context': context,
                     'source': 'cache'
@@ -1705,7 +1713,7 @@ def get_matter_context():
                 # Create a project from the matter context
                 logger.info(f"[app] Creating project from cached matter context")
                 from salesforce_create_new_client import process_nulaw_response_and_create_project
-                project_result = process_nulaw_response_and_create_project(result, False, download_files)
+                project_result = process_nulaw_response_and_create_project(result, False, download_files, billing_email)
                 
                 if project_result:
                     # Add project information to the response
@@ -1814,6 +1822,7 @@ def get_matter_context():
                 result = {
                     'status': 'success',
                     'matter_id': matter_id,
+                    'billing_email': billing_email,
                     'download_files': download_files,
                     'context': context,
                     'source': 'soql_query'
@@ -1822,7 +1831,7 @@ def get_matter_context():
                 # Create a project from the matter context
                 logger.info(f"[app] Creating project from matter context (download_files={download_files})")
                 from salesforce_create_new_client import process_nulaw_response_and_create_project
-                project_result = process_nulaw_response_and_create_project(result, False, download_files)
+                project_result = process_nulaw_response_and_create_project(result, False, download_files, billing_email)
                 
                 if project_result:
                     # Add project information to the response
@@ -1862,6 +1871,7 @@ def get_matter_context():
         result = {
             'status': 'partial_success',
             'matter_id': matter_id,
+            'billing_email': billing_email,
             'download_files': download_files,
             'context': minimal_context,
             'source': 'minimal',
@@ -1871,7 +1881,7 @@ def get_matter_context():
         # Create a project from the minimal matter context
         logger.info(f"[app] Creating project from minimal matter context")
         from salesforce_create_new_client import process_nulaw_response_and_create_project
-        project_result = process_nulaw_response_and_create_project(result, False, download_files)
+        project_result = process_nulaw_response_and_create_project(result, False, download_files, billing_email)
         
         if project_result:
             # Add project information to the response
